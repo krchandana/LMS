@@ -3,47 +3,147 @@ import { ArrowRight, Eye, EyeOff, ShieldCheck, Sparkles, Users, BookOpen } from 
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
 
+const isMissingTableError = (error) => {
+  const message = (error?.message || "").toLowerCase();
+  return message.includes("could not find the table") || message.includes("relation") && message.includes("does not exist");
+};
+
+const isMissingColumnError = (error) => {
+  const message = (error?.message || "").toLowerCase();
+  return message.includes("column") && message.includes("does not exist");
+};
+
+const queryTrainerEmailInTable = async (table, search, requireRole = false) => {
+  const columns = ["full_name", "name"];
+  let roleFilterEnabled = requireRole;
+
+  for (const column of columns) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (attempt === 1 && !roleFilterEnabled) break;
+
+      const useRoleFilter = attempt === 0 && roleFilterEnabled;
+      try {
+        let query = supabase.from(table).select("email").ilike(column, search).limit(1);
+        if (useRoleFilter) query = query.eq("role", "trainer");
+
+        const { data, error } = await query;
+        if (!error && Array.isArray(data) && data.length > 0) {
+          return data[0].email;
+        }
+
+        if (error) {
+          if (isMissingTableError(error)) return null;
+          if (isMissingColumnError(error)) {
+            const message = error.message.toLowerCase();
+            if (useRoleFilter && message.includes("role")) {
+              roleFilterEnabled = false;
+              continue;
+            }
+            break;
+          }
+          throw error;
+        }
+
+        if (useRoleFilter) {
+          continue;
+        }
+      } catch (err) {
+        if (isMissingTableError(err)) return null;
+        if (isMissingColumnError(err)) {
+          const message = err.message.toLowerCase();
+          if (useRoleFilter && message.includes("role")) {
+            roleFilterEnabled = false;
+            continue;
+          }
+          break;
+        }
+        throw err;
+      }
+    }
+  }
+
+  return null;
+};
+
+const findTrainerEmailByName = async (trainerIdentifier) => {
+  // Trainer login now accepts a trainer ID (exact match) or an email address.
+  const normalized = (trainerIdentifier || "").trim();
+  if (!normalized) return null;
+
+  // If the user entered an email, use it directly.
+  if (normalized.includes("@")) return normalized;
+
+  // Try different exact-match columns: trainer_login_id (case-insensitive), id
+  try {
+    const { data: profileByLogin, error: pLoginErr } = await supabase
+      .from("profiles")
+      .select("email")
+      .ilike("trainer_login_id", normalized)
+      .limit(1);
+    if (!pLoginErr && Array.isArray(profileByLogin) && profileByLogin.length > 0) return profileByLogin[0].email;
+
+    const { data: profileById, error: pIdErr } = await supabase.from("profiles").select("email").eq("id", normalized).limit(1);
+    if (!pIdErr && Array.isArray(profileById) && profileById.length > 0) return profileById[0].email;
+
+    const { data: trainerByLogin, error: tLoginErr } = await supabase
+      .from("trainers")
+      .select("email")
+      .ilike("trainer_login_id", normalized)
+      .limit(1);
+    if (!tLoginErr && Array.isArray(trainerByLogin) && trainerByLogin.length > 0) return trainerByLogin[0].email;
+
+    const { data: trainerById, error: tIdErr } = await supabase.from("trainers").select("email").eq("id", normalized).limit(1);
+    if (!tIdErr && Array.isArray(trainerById) && trainerById.length > 0) return trainerById[0].email;
+
+    // Fallback: try fuzzy name lookup for older records that may not have trainer_login_id
+    const profileEmail = await queryTrainerEmailInTable("profiles", `%${normalized}%`, true);
+    if (profileEmail) return profileEmail;
+    return queryTrainerEmailInTable("trainers", `%${normalized}%`, false);
+  } catch (err) {
+    if (isMissingTableError(err)) return null;
+    throw err;
+  }
+};
+
 const TrainerLogin = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [trainerName, setTrainerName] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const navigate = useNavigate();
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setError("");
+    setSuccess("");
     setIsSubmitting(true);
 
-    const normalizedName = trainerName.trim();
-    if (!normalizedName) {
-      setError("Please enter your trainer name.");
+    const normalizedId = trainerName.trim();
+    if (!normalizedId) {
+      setError("Please enter your trainer ID.");
       setIsSubmitting(false);
       return;
     }
 
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("email")
-      .ilike("full_name", normalizedName)
-      .eq("role", "trainer")
-      .maybeSingle();
-
-    if (profileError) {
-      setError(profileError.message);
+    let trainerEmail;
+    try {
+      trainerEmail = await findTrainerEmailByName(normalizedId);
+    } catch (err) {
+      setError(err?.message || "Unable to look up the trainer account.");
       setIsSubmitting(false);
       return;
     }
-
-    if (!profile?.email) {
-      setError("Trainer not found. Please use the name assigned by admin.");
+    if (!trainerEmail) {
+      setError("Trainer not found. Please use the ID assigned by admin.");
       setIsSubmitting(false);
       return;
     }
 
     const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: profile.email,
+      email: trainerEmail,
       password,
     });
 
@@ -55,6 +155,47 @@ const TrainerLogin = () => {
     }
 
     navigate("/trainer", { replace: true });
+  };
+
+  const handleResetPassword = async () => {
+    setError("");
+    setSuccess("");
+
+    const normalizedId = trainerName.trim();
+    if (!normalizedId) {
+      setError("Please enter your trainer ID first.");
+      return;
+    }
+
+    setIsResetting(true);
+
+    let trainerEmail;
+    try {
+      trainerEmail = await findTrainerEmailByName(normalizedId);
+    } catch (err) {
+      setError(err?.message || "Unable to look up the trainer account.");
+      setIsResetting(false);
+      return;
+    }
+
+    if (!trainerEmail) {
+      setError("Trainer not found. Please use the ID assigned by admin.");
+      setIsResetting(false);
+      return;
+    }
+
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(trainerEmail, {
+      redirectTo: `${window.location.origin}/trainer-login`,
+    });
+
+    setIsResetting(false);
+
+    if (resetError) {
+      setError(resetError.message || "Unable to send password reset email.");
+      return;
+    }
+
+    setSuccess(`Password reset email sent to ${trainerEmail}.`);
   };
 
   return (
@@ -105,16 +246,16 @@ const TrainerLogin = () => {
 
             <form onSubmit={handleLogin} className="mt-8 space-y-5">
               <div>
-                <label className="mb-2 block text-sm font-medium text-cert-ink">Trainer Name</label>
+                <label className="mb-2 block text-sm font-medium text-cert-ink">Trainer ID</label>
                 <input
                   type="text"
-                  placeholder="Enter trainer name"
+                  placeholder="Enter trainer ID"
                   value={trainerName}
                   onChange={(e) => setTrainerName(e.target.value)}
                   className="w-full rounded-3xl border border-cert-line bg-cert-mint px-4 py-3 text-cert-ink outline-none focus:border-cert-green focus:ring-2 focus:ring-cert-green/20"
                   required
                 />
-                <p className="mt-2 text-sm text-slate-500">Use the trainer name created by admin.</p>
+                <p className="mt-2 text-sm text-slate-500">Use the trainer ID created by admin.</p>
               </div>
 
               <div>
@@ -142,12 +283,25 @@ const TrainerLogin = () => {
                 <p className="rounded-3xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>
               )}
 
+              {success && (
+                <p className="rounded-3xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</p>
+              )}
+
               <button
                 type="submit"
                 disabled={isSubmitting}
                 className="inline-flex w-full items-center justify-center rounded-3xl bg-cert-green px-4 py-3 text-cert-ink font-semibold transition hover:bg-cert-green-dark hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isSubmitting ? "Logging in..." : "Trainer Login"}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetPassword}
+                disabled={isResetting}
+                className="inline-flex w-full items-center justify-center rounded-3xl border border-cert-line bg-white px-4 py-3 text-sm font-semibold text-cert-ink transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isResetting ? "Sending reset link..." : "Reset password"}
               </button>
             </form>
           </div>

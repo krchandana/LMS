@@ -21,9 +21,99 @@ const isMissingTableError = (error) =>
   error?.message?.toLowerCase().includes("could not find the table") ||
   error?.message?.toLowerCase().includes("schema cache");
 
-const isStackDepthError = (error) => {
-  const message = `${error?.message || ""} ${error?.details || ""}`.toLowerCase();
-  return message.includes("stack depth limit exceeded");
+const isMissingColumnError = (error) => {
+  const message = (error?.message || "").toLowerCase();
+  return message.includes("column") && message.includes("does not exist");
+};
+
+const queryTrainerEmailInTable = async (table, search, requireRole = false) => {
+  const columns = ["full_name", "name"];
+  let roleFilterEnabled = requireRole;
+
+  for (const column of columns) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (attempt === 1 && !roleFilterEnabled) break;
+
+      const useRoleFilter = attempt === 0 && roleFilterEnabled;
+      try {
+        let query = supabase.from(table).select("email").ilike(column, search).limit(1);
+        if (useRoleFilter) query = query.eq("role", "trainer");
+
+        const { data, error } = await query;
+        if (!error && Array.isArray(data) && data.length > 0) {
+          return data[0].email;
+        }
+
+        if (error) {
+          if (isMissingTableError(error)) return null;
+          if (isMissingColumnError(error)) {
+            const message = error.message.toLowerCase();
+            if (useRoleFilter && message.includes("role")) {
+              roleFilterEnabled = false;
+              continue;
+            }
+            break;
+          }
+          throw error;
+        }
+
+        if (useRoleFilter) {
+          continue;
+        }
+      } catch (err) {
+        if (isMissingTableError(err)) return null;
+        if (isMissingColumnError(err)) {
+          const message = err.message.toLowerCase();
+          if (useRoleFilter && message.includes("role")) {
+            roleFilterEnabled = false;
+            continue;
+          }
+          break;
+        }
+        throw err;
+      }
+    }
+  }
+
+  return null;
+};
+
+const findTrainerEmailByName = async (trainerIdentifier) => {
+  // Support trainer ID (exact) or email input.
+  const normalized = (trainerIdentifier || "").trim();
+  if (!normalized) return null;
+
+  if (normalized.includes("@")) return normalized;
+
+  try {
+    const { data: profileByLogin, error: pLoginErr } = await supabase
+      .from("profiles")
+      .select("email")
+      .ilike("trainer_login_id", normalized)
+      .limit(1);
+    if (!pLoginErr && Array.isArray(profileByLogin) && profileByLogin.length > 0) return profileByLogin[0].email;
+
+    const { data: profileById, error: pIdErr } = await supabase.from("profiles").select("email").eq("id", normalized).limit(1);
+    if (!pIdErr && Array.isArray(profileById) && profileById.length > 0) return profileById[0].email;
+
+    const { data: trainerByLogin, error: tLoginErr } = await supabase
+      .from("trainers")
+      .select("email")
+      .ilike("trainer_login_id", normalized)
+      .limit(1);
+    if (!tLoginErr && Array.isArray(trainerByLogin) && trainerByLogin.length > 0) return trainerByLogin[0].email;
+
+    const { data: trainerById, error: tIdErr } = await supabase.from("trainers").select("email").eq("id", normalized).limit(1);
+    if (!tIdErr && Array.isArray(trainerById) && trainerById.length > 0) return trainerById[0].email;
+
+    // Fallback: fuzzy name lookup for older records without trainer_login_id
+    const profileEmail = await queryTrainerEmailInTable("profiles", `%${normalized}%`, true);
+    if (profileEmail) return profileEmail;
+    return queryTrainerEmailInTable("trainers", `%${normalized}%`, false);
+  } catch (err) {
+    if (isMissingTableError(err)) return null;
+    throw err;
+  }
 };
 
 const adminAuthRequest = async (path, method, body) => {
@@ -66,48 +156,6 @@ const serviceRoleTableRequest = async (table, path, method, body, extraHeaders =
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
   return response.ok ? { data } : { error: data };
-};
-
-const ensureAdminAuthUser = async ({ email, password }) => {
-  if (!hasServiceRoleKey) {
-    return { error: { message: "Admin auth bootstrap requires service role configuration." } };
-  }
-
-  const listResult = await adminAuthRequest("/users?page=1&per_page=1000", "GET");
-  if (listResult.error) return { error: listResult.error };
-
-  const users = listResult.data?.users || [];
-  const existingUser = users.find((user) => (user?.email || "").toLowerCase() === email.toLowerCase());
-
-  if (existingUser?.id) {
-    const updateResult = await adminAuthRequest(`/users/${existingUser.id}`, "PUT", {
-      password,
-      email_confirm: true,
-      user_metadata: {
-        ...(existingUser.user_metadata || {}),
-        full_name: existingUser.user_metadata?.full_name || email,
-        role: "admin",
-        status: "active",
-      },
-    });
-
-    if (updateResult.error) return { error: updateResult.error };
-    return { data: updateResult.data?.user || updateResult.data || existingUser };
-  }
-
-  const createResult = await adminAuthRequest("/users", "POST", {
-    email,
-    password,
-    email_confirm: true,
-    user_metadata: {
-      full_name: email,
-      role: "admin",
-      status: "active",
-    },
-  });
-
-  if (createResult.error) return { error: createResult.error };
-  return { data: createResult.data?.user || createResult.data };
 };
 
 const insertWithColumnFallback = async (table, payload) => {
@@ -195,28 +243,6 @@ const findApprovedStudentProfileByColumn = async (column, value) => {
   return { error };
 };
 
-const findLatestAccessRequestByEmail = async (email) => {
-  const safeEmail = (email || "").trim();
-  if (!safeEmail) return { data: null };
-
-  const { data, error } = await supabase
-    .from("access_requests")
-    .select("id,email,status,student_id,student_login_id")
-    .eq("email", safeEmail)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (!error) return { data };
-
-  const message = error.message || "";
-  if (isMissingTableError(error)) return { data: null, skipped: true };
-  const missingColumn = message.match(/column "([^"]+)"/i) || message.match(/'([^']+)' column/i);
-  if (missingColumn) return { data: null };
-
-  return { error };
-};
-
 const repairApprovedStudentProfile = async ({ profile, studentId, authEmail, user }) => {
   const currentStatus = (profile?.status || "").toLowerCase();
   if (approvedStudentStatuses.includes(currentStatus)) {
@@ -263,13 +289,7 @@ const repairApprovedStudentProfile = async ({ profile, studentId, authEmail, use
   };
   const repairResult = await upsertWithColumnFallback("profiles", repairPayload, { onConflict: "id" });
 
-  if (repairResult.error) {
-    if (isStackDepthError(repairResult.error)) {
-      return { approved: true };
-    }
-
-    return { error: repairResult.error };
-  }
+  if (repairResult.error) return { error: repairResult.error };
 
   return { approved: true };
 };
@@ -285,7 +305,48 @@ const LoginPage = () => {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
   const navigate = useNavigate();
+
+  const handleTrainerReset = async () => {
+    setError("");
+    setSuccess("");
+
+    const trainerIdentifier = credential.trim();
+    if (!trainerIdentifier) {
+      setError("Please enter your trainer ID first.");
+      return;
+    }
+
+    setIsResetting(true);
+    let trainerEmail;
+    try {
+      trainerEmail = await findTrainerEmailByName(trainerIdentifier);
+    } catch (err) {
+      setError(err?.message || "Unable to look up the trainer account.");
+      setIsResetting(false);
+      return;
+    }
+
+    if (!trainerEmail) {
+      setError("Trainer not found. Please use the ID assigned by admin.");
+      setIsResetting(false);
+      return;
+    }
+
+    const { error: resetError } = await supabase.auth.resetPasswordForEmail(trainerEmail, {
+      redirectTo: `${window.location.origin}/trainer-login`,
+    });
+
+    setIsResetting(false);
+
+    if (resetError) {
+      setError(resetError.message || "Unable to send password reset email.");
+      return;
+    }
+
+    setSuccess(`Password reset email sent to ${trainerEmail}.`);
+  };
 
   const submitStudentRequest = async (emailToUse) => {
     if (!studentName.trim()) {
@@ -296,61 +357,6 @@ const LoginPage = () => {
     const studentId = `STU${Date.now().toString().slice(-8)}`;
     const authEmail = studentAuthEmailFor(studentId);
     const temporaryPassword = `Pending@${Date.now().toString().slice(-6)}`;
-
-    const existingRequestResult = await findLatestAccessRequestByEmail(emailToUse);
-    if (existingRequestResult.error) {
-      setError(existingRequestResult.error.message || "Unable to validate existing student request.");
-      return;
-    }
-
-    if (existingRequestResult.skipped) {
-      // Fallback for projects that do not have access_requests yet.
-      const { data: existingPendingProfile, error: pendingProfileError } = await supabase
-        .from("profiles")
-        .select("id,status,role")
-        .eq("email", emailToUse)
-        .maybeSingle();
-
-      if (!pendingProfileError && existingPendingProfile?.id) {
-        const status = (existingPendingProfile.status || "").toLowerCase();
-        const role = (existingPendingProfile.role || "").toLowerCase();
-
-        if (role && role !== "student") {
-          setError("This email is already used by another account. Please use a different email.");
-          return;
-        }
-
-        if (status === "pending") {
-          setSuccess("Your login request is already with admin. Please wait for approval.");
-          return;
-        }
-
-        if (["active", "approved"].includes(status)) {
-          setSuccess("This student email is already approved. Use Student Login tab to sign in.");
-          return;
-        }
-      }
-    }
-
-    const existingRequest = existingRequestResult.data;
-    if (existingRequest?.id) {
-      const existingStatus = (existingRequest.status || "").toLowerCase();
-
-      if (existingStatus === "pending") {
-        setSuccess("Your login request is already with admin. Please wait for approval.");
-        return;
-      }
-
-      if (["active", "approved"].includes(existingStatus)) {
-        const existingStudentId = existingRequest.student_id || existingRequest.student_login_id;
-        if (existingStudentId) {
-          setSuccess(`Your account is already approved. Please log in using Student ID: ${existingStudentId}.`);
-        } else {
-          setSuccess("Your account is already approved. Please use Student Login mode.");
-        }
-        return;
-      }
-    }
 
     const { data: createdUser, error: createError } = await adminAuthRequest("/users", "POST", {
       email: authEmail,
@@ -377,6 +383,23 @@ const LoginPage = () => {
     }
 
     const authUser = createdUser;
+    const profilePayload = {
+      id: authUser?.id,
+      email: emailToUse,
+      auth_email: authEmail,
+      full_name: studentName.trim(),
+      role: "student",
+      status: "pending",
+      student_id: studentId,
+    };
+
+    if (authUser?.id) {
+      const { error: profileError } = await upsertWithColumnFallback("profiles", profilePayload, { onConflict: "id" });
+      if (profileError) {
+        setError(profileError.message || "Unable to save the student request.");
+        return;
+      }
+    }
 
     const requestPayload = {
       profile_id: authUser?.id,
@@ -393,33 +416,6 @@ const LoginPage = () => {
     };
 
     const { error: requestError } = await insertWithColumnFallback("access_requests", requestPayload);
-    if (requestError && isMissingTableError(requestError)) {
-      const profileFallback = await upsertWithColumnFallback(
-        "profiles",
-        {
-          id: authUser?.id,
-          email: emailToUse,
-          auth_email: authEmail,
-          full_name: studentName.trim(),
-          role: "student",
-          status: "pending",
-        },
-        { onConflict: "id" }
-      );
-
-      await supabase.auth.signOut();
-
-      if (profileFallback.error) {
-        setError(profileFallback.error.message || "Unable to save student request.");
-        return;
-      }
-
-      setStudentName("");
-      setStudentEmail("");
-      setCredential("");
-      setSuccess("Registration successful. Your request was sent to admin.");
-      return;
-    }
     await supabase.auth.signOut();
 
     if (requestError) {
@@ -454,32 +450,28 @@ const LoginPage = () => {
     }
 
     if (!emailToUse) {
-      setError(role === "trainer" ? "Please enter your trainer name." : role === "student" ? "Please enter your Student ID." : "Please enter your email.");
+      setError(role === "trainer" ? "Please enter your trainer ID." : role === "student" ? "Please enter your Student ID." : "Please enter your email.");
       setIsSubmitting(false);
       return;
     }
 
     if (role === "trainer") {
-      const { data: profile, error: profileError } = await supabase
-        .from("profiles")
-        .select("email")
-        .ilike("full_name", emailToUse)
-        .eq("role", "trainer")
-        .maybeSingle();
-
-      if (profileError) {
-        setError(profileError.message);
+      let trainerEmail;
+      try {
+        trainerEmail = await findTrainerEmailByName(emailToUse);
+      } catch (err) {
+        setError(err?.message || "Unable to look up the trainer account.");
         setIsSubmitting(false);
         return;
       }
 
-      if (!profile?.email) {
-        setError("Trainer not found. Please use the name assigned by admin.");
+      if (!trainerEmail) {
+        setError("Trainer not found. Please use the ID assigned by admin.");
         setIsSubmitting(false);
         return;
       }
 
-      emailToUse = profile.email;
+      emailToUse = trainerEmail;
     }
 
     if (role === "student") {
@@ -547,39 +539,22 @@ const LoginPage = () => {
       return;
     }
 
-    let { data, error: signInError } = await supabase.auth.signInWithPassword({
+    const { data, error: signInError } = await supabase.auth.signInWithPassword({
       email: emailToUse,
       password,
     });
 
+    setIsSubmitting(false);
+
     if (signInError) {
       if (role === "admin" && isAuthServiceUnavailable(signInError)) {
-        setIsSubmitting(false);
         navigate("/admin", { replace: true });
         return;
       }
 
-      if (role === "admin") {
-        const bootstrapResult = await ensureAdminAuthUser({ email: emailToUse, password });
-        if (!bootstrapResult.error) {
-          const retry = await supabase.auth.signInWithPassword({
-            email: emailToUse,
-            password,
-          });
-          data = retry.data;
-          signInError = retry.error;
-        }
-      }
-
-      setIsSubmitting(false);
-
-      if (signInError) {
-        setError(signInError.message);
-        return;
-      }
+      setError(signInError.message);
+      return;
     }
-
-    setIsSubmitting(false);
 
     const user = data.user || data.session?.user;
     if (!user) {
@@ -757,18 +732,18 @@ const LoginPage = () => {
               )}
               <div>
                 <label className="block text-sm font-medium text-slate-700">
-                  {role === "trainer" ? "Trainer Name" : role === "student" && studentMode !== "register" ? "Student ID" : "Email"}
+                  {role === "trainer" ? "Trainer ID" : role === "student" && studentMode !== "register" ? "Student ID" : "Email"}
                 </label>
                 <input
                   type={role === "student" && studentMode !== "register" ? "text" : role === "trainer" ? "text" : "email"}
                   value={role === "student" && studentMode === "register" ? studentEmail : credential}
                   onChange={(e) => role === "student" && studentMode === "register" ? setStudentEmail(e.target.value) : setCredential(e.target.value)}
-                  placeholder={role === "student" && studentMode !== "register" ? "Example: STU12345678" : role === "trainer" ? "Enter trainer name" : "your@email.com"}
+                  placeholder={role === "student" && studentMode !== "register" ? "Example: STU12345678" : role === "trainer" ? "Enter trainer ID" : "your@email.com"}
                   className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-cert-ink outline-none transition focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
                   required
                 />
                 {role === "trainer" && (
-                  <p className="mt-2 text-sm text-slate-500">Use the trainer name assigned by admin.</p>
+                  <p className="mt-2 text-sm text-slate-500">Use the trainer ID assigned by admin.</p>
                 )}
               </div>
               {(role !== "student" || (studentMode !== "reset" && studentMode !== "register")) && (
@@ -815,6 +790,16 @@ const LoginPage = () => {
                     ? "Signing in..."
                     : `Sign in as ${role}`}
               </button>
+              {role === "trainer" && (
+                <button
+                  type="button"
+                  onClick={handleTrainerReset}
+                  disabled={isResetting}
+                  className="mt-3 w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-cert-ink transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isResetting ? "Sending reset link..." : "Reset password"}
+                </button>
+              )}
               </form>
             </section>
           </div>

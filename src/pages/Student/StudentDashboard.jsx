@@ -112,19 +112,11 @@ export default function StudentDashboard() {
       const trainerId = student.trainer_id || profile.trainer_id;
       const directCourseIds = [student.course_id, student.course, profile.course_id].filter(Boolean);
 
-      let enrollmentRows = await firstWorkingList("enrollments", [
+      const enrollmentRows = await firstWorkingList("student_courses", [
         (query) => query.in("student_id", studentIds),
         (query) => query.in("profile_id", studentIds),
         (query) => query.eq("email", profile.email || user.email),
       ]);
-
-      if (!enrollmentRows.length) {
-        enrollmentRows = await firstWorkingList("student_courses", [
-          (query) => query.in("student_id", studentIds),
-          (query) => query.in("profile_id", studentIds),
-          (query) => query.eq("email", profile.email || user.email),
-        ]);
-      }
       const enrolledCourseIds = [...new Set([...directCourseIds, ...enrollmentRows.map((row) => row.course_id || row.id).filter(Boolean)])];
 
       const courseRows = enrolledCourseIds.length
