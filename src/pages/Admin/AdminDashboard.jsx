@@ -114,6 +114,27 @@ const safeUpdate = async (table, id, payload) => {
   return { error: { message: "Unable to update record." } };
 };
 
+const missingColumn = (error) => {
+  const message = (error?.message || "").toLowerCase();
+  return message.includes("column") && message.includes("does not exist");
+};
+
+const safeDelete = async (table, column, value) => {
+  const { data, error } = await supabase.from(table).delete().eq(column, value).select("id");
+  if (!error) {
+    const deleted = Array.isArray(data) ? data.length : (data ? 1 : 0);
+    if (deleted > 0 || !hasServiceRoleKey) return { data, deleted };
+    // If RLS prevented deletion, try service role delete when available.
+    const serviceResult = await serviceRoleDelete(table, column, value);
+    if (!serviceResult.error) {
+      return { data: serviceResult.data, deleted: serviceResult.deleted };
+    }
+    return { data, deleted };
+  }
+  if (missingTable(error) || missingColumn(error)) return { skipped: true };
+  return { error };
+};
+
 const serviceRoleAuthRequest = async (path, method, body) => {
   if (!hasServiceRoleKey) return { error: { message: "Service role key is not configured." } };
 
@@ -234,7 +255,13 @@ const sendTrainerCredentialsEmail = async ({ email, name, password, trainerId })
   return { ok: true };
 };
 
-const studentAuthEmailFor = (studentId) => `${String(studentId || "").trim().toLowerCase()}@student.local`;
+const normalizeStudentId = (studentId) => {
+  const id = String(studentId || "").trim().toUpperCase();
+  if (!id) return "";
+  return id.startsWith("STU") ? id : `STU${id}`;
+};
+
+const studentAuthEmailFor = (studentId) => `${normalizeStudentId(studentId).toLowerCase()}@student.local`;
 
 const generateStudentPassword = () => `Stud@${Date.now().toString().slice(-6)}${Math.floor(10 + Math.random() * 90)}`;
 
@@ -295,6 +322,32 @@ const serviceRoleTableRequest = async (table, path, method, body, extraHeaders =
   return response.ok ? { data } : { error: data };
 };
 
+const serviceRoleDelete = async (table, column, value) => {
+  if (!hasServiceRoleKey) return { skipped: true };
+  const path = `?${encodeURIComponent(column)}=eq.${encodeURIComponent(value)}`;
+  const result = await serviceRoleTableRequest(table, path, "DELETE");
+  if (result.error) return { error: result.error };
+  const deleted = Array.isArray(result.data) ? result.data.length : 0;
+  return { data: result.data, deleted };
+};
+
+const serviceRoleInsert = async (table, payload) => {
+  if (!hasServiceRoleKey) return { skipped: true };
+  const result = await serviceRoleTableRequest(table, "?select=*", "POST", payload);
+  if (result.error) return { error: result.error };
+  const data = Array.isArray(result.data) ? result.data[0] : result.data;
+  return { data };
+};
+
+const serviceRoleUpsert = async (table, payload, onConflict = "id") => {
+  if (!hasServiceRoleKey) return { skipped: true };
+  const path = `?on_conflict=${encodeURIComponent(onConflict)}&select=*`;
+  const result = await serviceRoleTableRequest(table, path, "POST", payload);
+  if (result.error) return { error: result.error };
+  const data = Array.isArray(result.data) ? result.data[0] : result.data;
+  return { data };
+};
+
 const fmtDate = (value) => {
   if (!value) return "N/A";
   const date = new Date(value);
@@ -320,6 +373,7 @@ export default function AdminDashboard() {
   const [courses, setCourses] = useState([]);
   const [studentRecords, setStudentRecords] = useState([]);
   const [studentCourseRows, setStudentCourseRows] = useState([]);
+  const [enrollmentRows, setEnrollmentRows] = useState([]);
 
   const [trainerName, setTrainerName] = useState("");
   const [trainerEmail, setTrainerEmail] = useState("");
@@ -335,6 +389,9 @@ export default function AdminDashboard() {
   const [mapStudentId, setMapStudentId] = useState("");
   const [mapTrainerId, setMapTrainerId] = useState("");
   const [mapCourseId, setMapCourseId] = useState("");
+  const [editingStudent, setEditingStudent] = useState(null);
+  const [editStudentName, setEditStudentName] = useState("");
+  const [editStudentStatus, setEditStudentStatus] = useState("active");
 
   const activeTab = location.pathname.endsWith("/requests")
     ? "requests"
@@ -510,6 +567,7 @@ export default function AdminDashboard() {
       setStudents(nextStudents);
       setCourses(nextCourses);
       setStudentRecords(nextStudentRecords);
+      setEnrollmentRows(nextEnrollmentRows);
       setStudentCourseRows(nextStudentCourseRows);
     } catch (err) {
       console.error("Data load error:", err);
@@ -524,21 +582,21 @@ export default function AdminDashboard() {
   }, []);
 
   const courseNameById = useMemo(
-    () => new Map(courses.map((course) => [course.id, firstValue(course.title, course.name, course.course_name, "Untitled course")])),
+    () => new Map(courses.map((course) => [String(course.id), firstValue(course.title, course.name, course.course_name, "Untitled course")])),
     [courses]
   );
 
   const trainerNameById = useMemo(
-    () => new Map(trainers.map((trainer) => [trainer.id, firstValue(trainer.full_name, trainer.name, trainer.email, "Unknown trainer")])),
+    () => new Map(trainers.map((trainer) => [String(trainer.id), firstValue(trainer.full_name, trainer.name, trainer.email, "Unknown trainer")])),
     [trainers]
   );
 
   const studentRecordByProfile = useMemo(() => {
     const map = new Map();
     studentRecords.forEach((record) => {
-      if (record.profile_id) map.set(record.profile_id, record);
-      if (record.user_id) map.set(record.user_id, record);
-      if (record.id) map.set(record.id, record);
+      if (record.profile_id) map.set(String(record.profile_id), record);
+      if (record.user_id) map.set(String(record.user_id), record);
+      if (record.id) map.set(String(record.id), record);
     });
     return map;
   }, [studentRecords]);
@@ -546,48 +604,81 @@ export default function AdminDashboard() {
   const enrollmentByProfile = useMemo(() => {
     const map = new Map();
     studentCourseRows.forEach((record) => {
-      if (record.profile_id) map.set(record.profile_id, record);
-      if (record.student_id) map.set(record.student_id, record);
-      if (record.user_id) map.set(record.user_id, record);
-      if (record.id) map.set(record.id, record);
+      if (record.profile_id) map.set(String(record.profile_id), record);
+      if (record.student_id) map.set(String(record.student_id), record);
+      if (record.user_id) map.set(String(record.user_id), record);
+      if (record.id) map.set(String(record.id), record);
+    });
+    enrollmentRows.forEach((record) => {
+      if (record.profile_id) map.set(String(record.profile_id), record);
+      if (record.student_id) map.set(String(record.student_id), record);
+      if (record.user_id) map.set(String(record.user_id), record);
+      if (record.id) map.set(String(record.id), record);
     });
     return map;
-  }, [studentCourseRows]);
+  }, [studentCourseRows, enrollmentRows]);
 
   const courseEnrollmentById = useMemo(() => {
     const map = new Map();
     studentRecords.forEach((record) => {
-      if (record.course_id) map.set(record.course_id, (map.get(record.course_id) || 0) + 1);
+      if (record.course_id) map.set(String(record.course_id), (map.get(String(record.course_id)) || 0) + 1);
     });
     studentCourseRows.forEach((record) => {
-      if (record.course_id) map.set(record.course_id, (map.get(record.course_id) || 0) + 1);
+      if (record.course_id) map.set(String(record.course_id), (map.get(String(record.course_id)) || 0) + 1);
+    });
+    enrollmentRows.forEach((record) => {
+      if (record.course_id) map.set(String(record.course_id), (map.get(String(record.course_id)) || 0) + 1);
     });
     return map;
-  }, [studentRecords, studentCourseRows]);
+  }, [studentRecords, studentCourseRows, enrollmentRows]);
 
   const trainerWorkloadById = useMemo(() => {
     const map = new Map();
     studentRecords.forEach((record) => {
-      if (record.trainer_id) map.set(record.trainer_id, (map.get(record.trainer_id) || 0) + 1);
+      if (record.trainer_id) map.set(String(record.trainer_id), (map.get(String(record.trainer_id)) || 0) + 1);
+    });
+    enrollmentRows.forEach((record) => {
+      if (record.trainer_id) map.set(String(record.trainer_id), (map.get(String(record.trainer_id)) || 0) + 1);
     });
     return map;
-  }, [studentRecords]);
+  }, [studentRecords, enrollmentRows]);
 
   const enrichedStudents = useMemo(
     () =>
       students.map((student) => {
-        const record = studentRecordByProfile.get(student.id) || enrollmentByProfile.get(student.id);
-        const courseId = firstValue(student.course_id, record?.course_id);
-        const trainerId = firstValue(student.trainer_id, record?.trainer_id);
-        const progress = Number(firstValue(record?.completion_percent, record?.progress_percent, student.completion_percent, 0)) || 0;
+        const enrollmentRecord = enrollmentByProfile.get(String(student.id));
+        const studentRecord = studentRecordByProfile.get(String(student.id));
+        const record = enrollmentRecord || studentRecord;
+        const courseId = firstValue(student.course_id, enrollmentRecord?.course_id, studentRecord?.course_id);
+        const trainerId = firstValue(student.trainer_id, enrollmentRecord?.trainer_id, studentRecord?.trainer_id);
+        const progress = Number(
+          firstValue(enrollmentRecord?.completion_percent, enrollmentRecord?.progress_percent, studentRecord?.completion_percent, studentRecord?.progress_percent, student.completion_percent, 0)
+        ) || 0;
 
         return {
           ...student,
-          student_id: firstValue(student.student_id, student.student_login_id, record?.student_id, record?.student_login_id),
-          enrolled_course: firstValue(student.course_name, record?.course_name, courseNameById.get(courseId), "Unassigned"),
-          trainer_name: firstValue(student.trainer_name, record?.trainer_name, trainerNameById.get(trainerId), "Unassigned"),
+          student_id: firstValue(student.student_id, student.student_login_id, enrollmentRecord?.student_id, enrollmentRecord?.student_login_id, studentRecord?.student_id, studentRecord?.student_login_id),
+          enrolled_course: firstValue(
+            student.course_name,
+            enrollmentRecord?.course_name,
+            studentRecord?.course_name,
+            courseNameById.get(String(courseId)),
+            "Unassigned"
+          ),
+          trainer_name: firstValue(
+            student.trainer_name,
+            enrollmentRecord?.trainer_name,
+            studentRecord?.trainer_name,
+            trainerNameById.get(String(trainerId)),
+            "Unassigned"
+          ),
           progress,
-          certificate_ready: Boolean(student.certificate_ready || record?.certificate_ready || progress >= 100),
+          certificate_ready: Boolean(
+            student.certificate_ready ||
+              enrollmentRecord?.certificate_ready ||
+              studentRecord?.certificate_ready ||
+              progress >= 100
+          ),
         };
       }),
     [students, studentRecordByProfile, enrollmentByProfile, courseNameById, trainerNameById]
@@ -628,7 +719,8 @@ export default function AdminDashboard() {
     setSuccess("");
 
     const profileId = firstValue(request.profile_id, request.user_id, request.id);
-    const studentLoginId = firstValue(request.student_id, request.student_login_id);
+    const rawStudentLoginId = firstValue(request.student_id, request.student_login_id);
+    const studentLoginId = normalizeStudentId(rawStudentLoginId);
     const studentName = firstValue(request.full_name, request.name, request.email, "Student");
     const studentEmail = (request.email || "").trim();
     const authEmail = firstValue(request.auth_email, studentAuthEmailFor(studentLoginId));
@@ -1038,6 +1130,154 @@ export default function AdminDashboard() {
     }
   };
 
+  const startEditStudent = (student) => {
+    setEditingStudent(student);
+    setEditStudentName(firstValue(student.full_name, student.name, student.email, ""));
+    setEditStudentStatus(student.status || "active");
+    setError("");
+    setSuccess("");
+  };
+
+  const cancelEditStudent = () => {
+    setEditingStudent(null);
+    setEditStudentName("");
+    setEditStudentStatus("active");
+    setError("");
+    setSuccess("");
+  };
+
+  const saveStudentEdit = async (event) => {
+    event.preventDefault();
+    if (!editingStudent) return;
+    if (!editStudentName.trim()) {
+      setError("Student name is required.");
+      return;
+    }
+
+    setSaving(true);
+    setError("");
+    setSuccess("");
+
+    const result = await safeUpdate("profiles", editingStudent.id, {
+      full_name: editStudentName.trim(),
+      name: editStudentName.trim(),
+      status: editStudentStatus,
+    });
+
+    setSaving(false);
+    if (result.error) {
+      setError(result.error.message || "Unable to update student.");
+      return;
+    }
+
+    setSuccess("Student details updated.");
+    cancelEditStudent();
+    await loadData();
+  };
+
+  const removeStudent = async (student) => {
+    if (!student?.id) return;
+    if (!window.confirm(`Remove student "${firstValue(student.full_name, student.name, student.email, "selected student")}"?`)) return;
+
+    setSaving(true);
+    setError("");
+    setSuccess("");
+
+    const identifiers = [
+      student.id,
+      student.profile_id,
+      student.user_id,
+      student.student_id,
+      student.student_login_id,
+    ]
+      .filter((value) => value !== null && value !== undefined && value !== "")
+      .map(String);
+
+    const emailIdentifiers = [student.email, student.auth_email]
+      .filter((value) => value !== null && value !== undefined && value !== "")
+      .map(String);
+
+    if (!identifiers.length && !emailIdentifiers.length) {
+      setSaving(false);
+      setError("Unable to identify the student record to remove.");
+      return;
+    }
+
+    const deleteTargets = [
+      ...identifiers.flatMap((value) => [
+        { table: "profiles", column: "id", value },
+        { table: "profiles", column: "profile_id", value },
+        { table: "profiles", column: "user_id", value },
+        { table: "profiles", column: "student_id", value },
+        { table: "profiles", column: "student_login_id", value },
+        { table: "profiles", column: "email", value },
+        { table: "profiles", column: "auth_email", value },
+        { table: "students", column: "id", value },
+        { table: "students", column: "profile_id", value },
+        { table: "students", column: "user_id", value },
+        { table: "students", column: "student_id", value },
+        { table: "students", column: "student_login_id", value },
+        { table: "students", column: "email", value },
+        { table: "students", column: "student_email", value },
+        { table: "enrollments", column: "profile_id", value },
+        { table: "enrollments", column: "student_id", value },
+        { table: "enrollments", column: "student_login_id", value },
+        { table: "enrollments", column: "user_id", value },
+        { table: "enrollments", column: "student_email", value },
+        { table: "student_courses", column: "profile_id", value },
+        { table: "student_courses", column: "student_id", value },
+        { table: "student_courses", column: "student_login_id", value },
+        { table: "student_courses", column: "user_id", value },
+        { table: "student_courses", column: "student_email", value },
+      ]),
+      ...emailIdentifiers.flatMap((value) => [
+        { table: "profiles", column: "email", value },
+        { table: "profiles", column: "auth_email", value },
+        { table: "students", column: "email", value },
+        { table: "students", column: "student_email", value },
+        { table: "enrollments", column: "student_email", value },
+        { table: "student_courses", column: "student_email", value },
+      ]),
+    ];
+
+    const uniqueTargets = Array.from(
+      new Map(deleteTargets.map((target) => [`${target.table}.${target.column}.${target.value}`, target]))
+        .values()
+    );
+
+    const results = await Promise.all(
+      uniqueTargets.map(({ table, column, value }) => safeDelete(table, column, value))
+    );
+
+    setSaving(false);
+
+    const deleteError = results.find((result) => result.error);
+    if (deleteError) {
+      setError(deleteError.error.message || "Unable to remove student.");
+      return;
+    }
+
+    const deletedCount = results.reduce(
+      (count, result) => count + (typeof result.deleted === "number" ? result.deleted : 0),
+      0
+    );
+
+    if (!deletedCount) {
+      const debugParts = uniqueTargets.map(({ table, column, value }, index) => {
+        const result = results[index];
+        if (result.skipped) return `${table}.${column}=${value}:skipped`;
+        if (typeof result.deleted === "number") return `${table}.${column}=${value}:deleted:${result.deleted}`;
+        return `${table}.${column}=${value}:failed`;
+      });
+      setError(`No student rows were removed. Debug: ${debugParts.join(", ")}`);
+      return;
+    }
+
+    setSuccess("Student removed.");
+    if (editingStudent?.id === student.id) cancelEditStudent();
+    await loadData();
+  };
+
   const removeCourse = async (course) => {
     if (!course?.id) return;
     if (!window.confirm(`Remove course \"${firstValue(course.title, course.name, course.course_name, "selected course")}\"?`)) return;
@@ -1088,11 +1328,9 @@ export default function AdminDashboard() {
       return;
     }
 
-    const existing = studentRecordByProfile.get(mapStudentId) || enrollmentByProfile.get(mapStudentId);
-    const rowId = existing?.id || mapStudentId;
+    const existingEnrollment = enrollmentByProfile.get(String(mapStudentId));
 
     const mappingPayload = {
-      id: rowId,
       profile_id: mapStudentId,
       user_id: mapStudentId,
       student_id: mapStudentId,
@@ -1101,25 +1339,48 @@ export default function AdminDashboard() {
       status: "active",
     };
 
-    let mappingResult = await safeInsert("enrollments", mappingPayload);
+    let mappingResult;
+    if (existingEnrollment?.id) {
+      mappingResult = await safeUpsert("enrollments", { ...mappingPayload, id: existingEnrollment.id }, "id");
+      if (mappingResult.skipped && hasServiceRoleKey) {
+        mappingResult = await serviceRoleUpsert("enrollments", { ...mappingPayload, id: existingEnrollment.id }, "id");
+      }
+    } else {
+      mappingResult = await safeInsert("enrollments", mappingPayload);
+      if (mappingResult.skipped && hasServiceRoleKey) {
+        mappingResult = await serviceRoleInsert("enrollments", mappingPayload);
+      }
+    }
 
     if (mappingResult.skipped) {
       mappingResult = await safeUpsert("students", mappingPayload, "id");
+      if (mappingResult.skipped && hasServiceRoleKey) {
+        mappingResult = await serviceRoleUpsert("students", mappingPayload, "id");
+      }
 
       if (!mappingResult.error && !mappingResult.skipped) {
-        await safeInsert("student_courses", {
+        let courseResult = await safeInsert("student_courses", {
           student_id: mapStudentId,
           profile_id: mapStudentId,
           course_id: mapCourseId,
           trainer_id: mapTrainerId,
           status: "active",
         });
+        if (courseResult.skipped && hasServiceRoleKey) {
+          courseResult = await serviceRoleInsert("student_courses", {
+            student_id: mapStudentId,
+            profile_id: mapStudentId,
+            course_id: mapCourseId,
+            trainer_id: mapTrainerId,
+            status: "active",
+          });
+        }
       }
     }
 
     if (mappingResult.error) {
       setSaving(false);
-      setError(mappingResult.error.message || "Unable to map student.");
+      setError(getDbErrorMessage(mappingResult.error, "Unable to map student."));
       return;
     }
 
@@ -1422,13 +1683,79 @@ export default function AdminDashboard() {
           <section className="rounded-[1.75rem] border border-cert-line bg-white p-6">
             <h2 className="text-2xl font-semibold text-cert-ink">Student List</h2>
             <p className="mt-2 text-sm text-slate-500">View student details, account status, enrolled courses, and assigned trainers.</p>
+            {editingStudent && (
+              <form onSubmit={saveStudentEdit} className="mb-6 rounded-[1.75rem] border border-cert-line bg-slate-50 p-5">
+                <h3 className="text-xl font-semibold text-cert-ink">Edit Student</h3>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700">Full name</label>
+                    <input
+                      value={editStudentName}
+                      onChange={(event) => setEditStudentName(event.target.value)}
+                      className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15"
+                      placeholder="Student name"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700">Status</label>
+                    <select
+                      value={editStudentStatus}
+                      onChange={(event) => setEditStudentStatus(event.target.value)}
+                      className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15"
+                    >
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                      <option value="approved">Approved</option>
+                      <option value="rejected">Rejected</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-3">
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="rounded-xl bg-cert-navy px-4 py-3 text-sm font-semibold text-white hover:bg-cert-ink disabled:opacity-70"
+                  >
+                    Save changes
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelEditStudent}
+                    className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-100"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            )}
             <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {enrichedStudents.length === 0 && <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">No students found.</p>}
               {enrichedStudents.map((student) => (
                 <article key={student.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <p className="font-semibold text-slate-900">{firstValue(student.full_name, student.name, student.email, "Student")}</p>
-                  <p className="mt-1 text-sm text-slate-600">Student ID: {student.student_id || "N/A"}</p>
-                  <p className="mt-1 text-sm text-slate-600">Status: {student.status || "N/A"}</p>
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-slate-900">{firstValue(student.full_name, student.name, student.email, "Student")}</p>
+                      <p className="mt-1 text-sm text-slate-600">Student ID: {student.student_id || "N/A"}</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => startEditStudent(student)}
+                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-100"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeStudent(student)}
+                        className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                  <p className="mt-3 text-sm text-slate-600">Status: {student.status || "N/A"}</p>
                   <p className="mt-1 text-sm text-slate-600">Course: {student.enrolled_course}</p>
                   <p className="mt-1 text-sm text-slate-600">Trainer: {student.trainer_name}</p>
                   <p className="mt-1 text-sm text-slate-600">Progress: {student.progress || 0}%</p>
