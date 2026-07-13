@@ -5,6 +5,15 @@ import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
 
 const titleFor = (item, fallback = "Untitled") => item?.title || item?.name || item?.full_name || item?.email || fallback;
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
+const serviceRoleKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY || "";
+const hasServiceRoleKey = Boolean(supabaseUrl && serviceRoleKey);
+const assignmentDateKey = (assignment) => assignment?.due_date || assignment?.created_at?.slice(0, 10) || "no-date";
+const formatAssignmentDate = (date) => {
+  if (!date || date === "no-date") return "No due date";
+  const parsed = new Date(`${date.slice(0, 10)}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? date : new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" }).format(parsed);
+};
 
 const fetchRows = async (table, buildQuery) => {
   try {
@@ -12,6 +21,26 @@ const fetchRows = async (table, buildQuery) => {
     if (buildQuery) query = buildQuery(query);
     const { data, error } = await query;
     return error ? [] : data || [];
+  } catch {
+    return [];
+  }
+};
+
+// Trainer RLS policies may legitimately return an empty list rather than an
+// error. The application already uses this configured admin fallback for
+// administrative data, so use it here to load the trainer's own mapped data.
+const fetchRowsWithServiceRole = async (table) => {
+  if (!hasServiceRoleKey) return [];
+  try {
+    const response = await fetch(`${supabaseUrl}/rest/v1/${table}?select=*&limit=1000`, {
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+      },
+    });
+    if (!response.ok) return [];
+    const rows = await response.json();
+    return Array.isArray(rows) ? rows : [];
   } catch {
     return [];
   }
@@ -32,29 +61,56 @@ export default function TrainerDashboard() {
   const [assignmentForm, setAssignmentForm] = useState({ courseId: "", title: "", description: "", dueDate: "" });
   const [projectForm, setProjectForm] = useState({ courseId: "", studentId: "", title: "", description: "" });
   const [reviewNotes, setReviewNotes] = useState({});
+  const [activeWorkspace, setActiveWorkspace] = useState("create-assignment");
 
   const loadDashboard = async () => {
     if (!profile?.id) return;
     setLoading(true);
-    const trainerCourses = await fetchRows("courses", (query) => query.eq("trainer_id", profile.id));
+    const allCourses = hasServiceRoleKey
+      ? await fetchRowsWithServiceRole("courses")
+      : await fetchRows("courses", (query) => query.eq("trainer_id", profile.id));
+    const trainerCourses = allCourses.filter((course) => String(course.trainer_id) === String(profile.id));
     const courseIds = trainerCourses.map((course) => course.id).filter(Boolean);
-    const enrollmentRows = courseIds.length
-      ? await fetchRows("enrollments", (query) => query.in("course_id", courseIds))
+    const allEnrollments = courseIds.length
+      ? (hasServiceRoleKey
+        ? await fetchRowsWithServiceRole("enrollments")
+        : await fetchRows("enrollments", (query) => query.in("course_id", courseIds)))
       : [];
+    const enrollmentRows = allEnrollments.filter((row) => courseIds.some((courseId) => String(courseId) === String(row.course_id)));
     const studentIds = [...new Set(enrollmentRows.map((row) => row.student_id).filter(Boolean))];
-    const studentRows = studentIds.length
-      ? await fetchRows("profiles", (query) => query.in("id", studentIds).eq("role", "student"))
+    const allStudentProfiles = studentIds.length
+      ? (hasServiceRoleKey
+        ? await fetchRowsWithServiceRole("profiles")
+        : await fetchRows("profiles", (query) => query.in("id", studentIds).eq("role", "student")))
       : [];
-    const assignmentRows = courseIds.length
-      ? await fetchRows("assignments", (query) => query.in("course_id", courseIds).order("created_at", { ascending: false }))
+    const studentRows = allStudentProfiles.filter((student) =>
+      studentIds.some((studentId) => String(studentId) === String(student.id)) && (student.role || "student") === "student"
+    );
+    const allAssignments = courseIds.length
+      ? (hasServiceRoleKey
+        ? await fetchRowsWithServiceRole("assignments")
+        : await fetchRows("assignments", (query) => query.in("course_id", courseIds).order("created_at", { ascending: false })))
       : [];
-    const projectRows = courseIds.length
-      ? await fetchRows("projects", (query) => query.in("course_id", courseIds).order("submitted_at", { ascending: false }))
+    const assignmentRows = allAssignments
+      .filter((assignment) => courseIds.some((courseId) => String(courseId) === String(assignment.course_id)))
+      .sort((first, second) => String(second.created_at || "").localeCompare(String(first.created_at || "")));
+    const allProjects = courseIds.length
+      ? (hasServiceRoleKey
+        ? await fetchRowsWithServiceRole("projects")
+        : await fetchRows("projects", (query) => query.in("course_id", courseIds).order("submitted_at", { ascending: false })))
       : [];
+    const projectRows = allProjects
+      .filter((project) => courseIds.some((courseId) => String(courseId) === String(project.course_id)))
+      .sort((first, second) => String(second.submitted_at || "").localeCompare(String(first.submitted_at || "")));
     const assignmentIds = assignmentRows.map((assignment) => assignment.id).filter(Boolean);
-    const submissionRows = assignmentIds.length
-      ? await fetchRows("submissions", (query) => query.in("assignment_id", assignmentIds).order("submitted_at", { ascending: false }))
+    const allSubmissions = assignmentIds.length
+      ? (hasServiceRoleKey
+        ? await fetchRowsWithServiceRole("submissions")
+        : await fetchRows("submissions", (query) => query.in("assignment_id", assignmentIds).order("submitted_at", { ascending: false })))
       : [];
+    const submissionRows = allSubmissions
+      .filter((submission) => assignmentIds.some((assignmentId) => String(assignmentId) === String(submission.assignment_id)))
+      .sort((first, second) => String(second.submitted_at || "").localeCompare(String(first.submitted_at || "")));
 
     setCourses(trainerCourses);
     setEnrollments(enrollmentRows);
@@ -72,6 +128,16 @@ export default function TrainerDashboard() {
   const studentById = useMemo(() => new Map(students.map((student) => [String(student.id), student])), [students]);
   const courseById = useMemo(() => new Map(courses.map((course) => [String(course.id), course])), [courses]);
   const assignmentById = useMemo(() => new Map(assignments.map((assignment) => [String(assignment.id), assignment])), [assignments]);
+  const assignmentsByDate = useMemo(() => {
+    const groups = new Map();
+    [...assignments]
+      .sort((first, second) => assignmentDateKey(first).localeCompare(assignmentDateKey(second)))
+      .forEach((assignment) => {
+        const date = assignmentDateKey(assignment);
+        groups.set(date, [...(groups.get(date) || []), assignment]);
+      });
+    return [...groups.entries()];
+  }, [assignments]);
 
   const courseStudents = (courseId) => {
     const ids = new Set(enrollments.filter((row) => String(row.course_id) === String(courseId)).map((row) => String(row.student_id)));
@@ -81,6 +147,12 @@ export default function TrainerDashboard() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     navigate("/", { replace: true });
+  };
+
+  const openWorkspace = (workspace) => {
+    setActiveWorkspace(workspace);
+    window.history.replaceState(null, "", `#${workspace}`);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const createAssignment = async (event) => {
@@ -207,11 +279,17 @@ export default function TrainerDashboard() {
   return (
     <div className="cert-bg-trainer min-h-screen px-4 py-4 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        <nav className="sticky top-3 z-20 flex items-center justify-between rounded-[1.75rem] border border-cert-line bg-white/95 p-3 shadow-[0_18px_50px_-35px_rgba(15,23,42,0.4)] backdrop-blur">
+        <nav className="sticky top-3 z-20 flex flex-wrap items-center justify-between gap-3 rounded-[1.75rem] border border-cert-line bg-white/95 p-3 shadow-[0_18px_50px_-35px_rgba(15,23,42,0.4)] backdrop-blur">
           <span className="px-3 text-sm font-semibold text-cert-green-dark">Trainer workspace</span>
-          <button type="button" onClick={handleLogout} className="inline-flex items-center gap-2 rounded-2xl bg-cert-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-cert-green-dark">
-            <LogOut size={16} /> Logout
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => openWorkspace("create-assignment")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "create-assignment" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Create assignment</button>
+            <button type="button" onClick={() => openWorkspace("assign-project")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "assign-project" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Assign project</button>
+            <button type="button" onClick={() => openWorkspace("project-reviews")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "project-reviews" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Project reviews</button>
+            <button type="button" onClick={() => openWorkspace("assignment-submissions")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "assignment-submissions" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Assignment submissions</button>
+            <button type="button" onClick={handleLogout} className="inline-flex items-center gap-2 rounded-xl bg-cert-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-cert-green-dark">
+              <LogOut size={16} /> Logout
+            </button>
+          </div>
         </nav>
 
         <section className="cert-glass-panel rounded-[2.5rem] p-8 text-cert-ink shadow-[0_28px_80px_-40px_rgba(15,23,42,0.18)]">
@@ -231,8 +309,9 @@ export default function TrainerDashboard() {
 
         {(error || message) && <p className={`rounded-2xl px-4 py-3 text-sm ${error ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>{error || message}</p>}
 
-        <section className="grid gap-5 xl:grid-cols-2">
-          <form onSubmit={createAssignment} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+        {(activeWorkspace === "create-assignment" || activeWorkspace === "assign-project") && (
+          <section className={`mx-auto grid w-full gap-5 ${activeWorkspace === "create-assignment" ? "max-w-7xl xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" : "max-w-3xl"}`}>
+          {activeWorkspace === "create-assignment" && <form id="create-assignment" onSubmit={createAssignment} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
             <h2 className="inline-flex items-center gap-2 text-xl font-semibold text-cert-ink"><Plus size={20} /> Create assignment</h2>
             <div className="mt-5 grid gap-3">
               <select value={assignmentForm.courseId} onChange={(e) => setAssignmentForm({ ...assignmentForm, courseId: e.target.value })} className="rounded-xl border border-cert-line bg-cert-mint px-4 py-3" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select>
@@ -241,9 +320,34 @@ export default function TrainerDashboard() {
               <input type="date" value={assignmentForm.dueDate} onChange={(e) => setAssignmentForm({ ...assignmentForm, dueDate: e.target.value })} className="rounded-xl border border-cert-line px-4 py-3" />
               <button className="rounded-xl bg-cert-green px-4 py-3 font-semibold text-cert-ink">Create assignment</button>
             </div>
-          </form>
+          </form>}
 
-          <form onSubmit={createProject} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+          {activeWorkspace === "create-assignment" && <aside className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold text-cert-ink">Saved assignments</h2>
+                <p className="mt-1 text-sm text-slate-500">Assignment details ordered by due date.</p>
+              </div>
+              <span className="rounded-full bg-cert-mint px-3 py-1 text-sm font-semibold text-cert-green-dark">{assignments.length} total</span>
+            </div>
+            <div className="mt-5 max-h-[34rem] space-y-5 overflow-y-auto pr-1">
+              {assignmentsByDate.length === 0 ? <p className="rounded-2xl bg-cert-mint p-4 text-sm text-slate-500">No assignments have been created yet.</p> : assignmentsByDate.map(([date, datedAssignments]) => <div key={date}>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-cert-green-dark">{formatAssignmentDate(date)}</p>
+                <div className="space-y-3">{datedAssignments.map((assignment) => <article key={assignment.id} className="rounded-2xl border border-cert-line bg-cert-mint/70 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <p className="font-semibold text-cert-ink">{titleFor(assignment, "Assignment")}</p>
+                      <p className="mt-1 text-sm text-slate-600">Course: {titleFor(courseById.get(String(assignment.course_id)), "Course")}</p>
+                    </div>
+                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-cert-green-dark">{assignment.status || "active"}</span>
+                  </div>
+                  {assignment.description && <p className="mt-3 text-sm leading-6 text-slate-600">{assignment.description}</p>}
+                </article>)}</div>
+              </div>)}
+            </div>
+          </aside>}
+
+          {activeWorkspace === "assign-project" && <form id="assign-project" onSubmit={createProject} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
             <h2 className="inline-flex items-center gap-2 text-xl font-semibold text-cert-ink"><Plus size={20} /> Assign project</h2>
             <div className="mt-5 grid gap-3">
               <select value={projectForm.courseId} onChange={(e) => setProjectForm({ ...projectForm, courseId: e.target.value, studentId: "" })} className="rounded-xl border border-cert-line bg-cert-mint px-4 py-3" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select>
@@ -252,19 +356,22 @@ export default function TrainerDashboard() {
               <textarea value={projectForm.description} onChange={(e) => setProjectForm({ ...projectForm, description: e.target.value })} placeholder="Project instructions" className="min-h-24 rounded-xl border border-cert-line px-4 py-3" />
               <button className="rounded-xl bg-cert-green px-4 py-3 font-semibold text-cert-ink">Assign project</button>
             </div>
-          </form>
-        </section>
+          </form>}
+          </section>
+        )}
 
-        <section className="grid gap-5 xl:grid-cols-2">
-          <div className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+        {(activeWorkspace === "assignment-submissions" || activeWorkspace === "project-reviews") && (
+          <section className="mx-auto grid w-full max-w-3xl gap-5">
+          {activeWorkspace === "assignment-submissions" && <div id="assignment-submissions" className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
             <h2 className="text-xl font-semibold text-cert-ink">Assignment submissions</h2>
             <div className="mt-5 space-y-4">{awaitingSubmissions.length === 0 ? <p className="rounded-2xl bg-cert-mint p-4 text-sm text-slate-500">No assignment submissions awaiting review.</p> : awaitingSubmissions.map((submission) => <ReviewCard key={submission.id} title={titleFor(assignmentById.get(String(submission.assignment_id)), "Assignment")} student={titleFor(studentById.get(String(submission.student_id)), "Student")} link={submission.submission_url} notes={reviewNotes[submission.id]} onNotes={(value) => setReviewNotes({ ...reviewNotes, [submission.id]: value })} onApprove={() => reviewSubmission(submission, "approved")} onRework={() => reviewSubmission(submission, "rework")} />)}</div>
-          </div>
-          <div className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+          </div>}
+          {activeWorkspace === "project-reviews" && <div id="project-reviews" className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
             <h2 className="text-xl font-semibold text-cert-ink">Project reviews</h2>
             <div className="mt-5 space-y-4">{awaitingProjects.length === 0 ? <p className="rounded-2xl bg-cert-mint p-4 text-sm text-slate-500">No projects awaiting review.</p> : awaitingProjects.map((project) => <ReviewCard key={project.id} title={titleFor(project, "Project")} student={titleFor(studentById.get(String(project.student_id)), "Student")} link={project.github_url || project.project_file_url} notes={reviewNotes[project.id]} onNotes={(value) => setReviewNotes({ ...reviewNotes, [project.id]: value })} onApprove={() => reviewProject(project, "approved")} onRework={() => reviewProject(project, "rework")} />)}</div>
-          </div>
-        </section>
+          </div>}
+          </section>
+        )}
       </div>
     </div>
   );

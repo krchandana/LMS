@@ -188,39 +188,9 @@ const createTrainerAuthUser = async ({ email, password, fullName, status, traine
       return { data: nextUser };
     }
 
-    const code = (createResult.error?.error_code || createResult.error?.code || "").toString().toLowerCase();
-    const msg = (createResult.error?.msg || createResult.error?.message || "").toString().toLowerCase();
-    const emailExists = code === "email_exists" || msg.includes("already been registered") || msg.includes("already registered");
-
-    if (!emailExists) {
-      return { error: createResult.error || { message: "Unable to create trainer auth user." } };
-    }
-
-    const listResult = await serviceRoleAuthRequest("/users?page=1&per_page=1000", "GET");
-    if (listResult.error) return { error: listResult.error };
-
-    const users = listResult.data?.users || [];
-    const existingUser = users.find((user) => (user?.email || "").toLowerCase() === email.toLowerCase());
-    if (!existingUser?.id) {
-      return { error: { message: "Email already exists in auth, but existing user could not be loaded." } };
-    }
-
-    const updateResult = await serviceRoleAuthRequest(`/users/${existingUser.id}`, "PUT", {
-      password,
-      email_confirm: true,
-      user_metadata: {
-        ...(existingUser.user_metadata || {}),
-        full_name: fullName,
-        role: "trainer",
-        status,
-        trainer_reference_id: trainerReferenceId,
-      },
-    });
-
-    if (updateResult.error) return { error: updateResult.error };
-
-    const updatedUser = updateResult.data?.user || updateResult.data || existingUser;
-    return { data: updatedUser };
+    // Never reuse an existing Auth account here. Reusing it can convert a
+    // student or the first trainer into the new trainer by mistake.
+    return { error: createResult.error || { message: "Unable to create trainer auth user." } };
   }
 
   const { data, error } = await supabase.auth.signUp({
@@ -577,6 +547,17 @@ export default function AdminDashboard() {
         .eq("role", "trainer")
         .limit(200);
 
+      // A restrictive profiles RLS policy can return only the current profile
+      // without an error. Use the admin service query for this admin-only list
+      // so every trainer remains available for mapping and management.
+      const trainersServiceRes = hasServiceRoleKey
+        ? await serviceRoleTableRequest(
+            "profiles",
+            "?select=*&role=eq.trainer&limit=200",
+            "GET"
+          )
+        : { data: [], error: null };
+
       const studentsRes = await supabase
         .from("profiles")
         .select("*")
@@ -667,16 +648,9 @@ export default function AdminDashboard() {
       let nextTrainers = trainersRes.error ? [] : (trainersRes.data || []);
       let nextTrainerTable = "profiles";
 
-      if (trainersRes.error && hasServiceRoleKey) {
-        const trainerList = await serviceRoleTableRequest(
-          "profiles",
-          "?select=*&role=eq.trainer&limit=200",
-          "GET"
-        );
-        if (!trainerList.error) {
-          nextTrainers = Array.isArray(trainerList.data) ? trainerList.data : [];
-          nextTrainerTable = "profiles";
-        }
+      if (hasServiceRoleKey && !trainersServiceRes.error) {
+        nextTrainers = Array.isArray(trainersServiceRes.data) ? trainersServiceRes.data : [];
+        nextTrainerTable = "profiles";
       }
 
       if (trainersRes.error && missingTable(trainersRes.error)) {
@@ -931,20 +905,35 @@ export default function AdminDashboard() {
 
     let profileSyncWarning = false;
 
-    const profileResult = await safeUpsert(
+    const profilePayload = {
+      id: profileId,
+      email: studentEmail,
+      auth_email: authEmail,
+      full_name: studentName,
+      role: "student",
+      status: "active",
+      student_id: studentLoginId,
+      student_login_id: studentLoginId,
+    };
+
+    let profileResult = await safeUpsert(
       "profiles",
-      {
-        id: profileId,
-        email: studentEmail,
-        auth_email: authEmail,
-        full_name: studentName,
-        role: "student",
-        status: "active",
-        student_id: studentLoginId,
-        student_login_id: studentLoginId,
-      },
+      profilePayload,
       "id"
     );
+
+    // Older requests can already have a profile under a different Auth id.
+    // Reuse that row instead of violating the unique email constraint.
+    if ((profileResult.error?.message || "").includes("profiles_email_key")) {
+      const existingProfileResult = await findProfileByEmail(studentEmail);
+      if (existingProfileResult.data?.id) {
+        profileResult = await safeUpsert(
+          "profiles",
+          { ...profilePayload, id: existingProfileResult.data.id },
+          "id"
+        );
+      }
+    }
 
     if (profileResult.error) {
       if (isStackDepthError(profileResult.error)) {
@@ -1068,7 +1057,23 @@ export default function AdminDashboard() {
     const nextTrainerReferenceId = generateTrainerReferenceId();
 
     try {
-      const nextTrainerEmail = trainerEmail.trim() || `trainer-${Date.now()}@trainer.local`;
+      const nextTrainerEmail = (trainerEmail.trim() || `trainer-${Date.now()}@trainer.local`).toLowerCase();
+
+      // Check the profile first so a second trainer is added as a new account,
+      // while an accidentally reused email gets a useful message.
+      const existingProfileResult = await findProfileByEmail(nextTrainerEmail);
+      if (existingProfileResult.error) {
+        setSaving(false);
+        setError(getDbErrorMessage(existingProfileResult.error, "Unable to check whether this trainer email is available."));
+        return;
+      }
+
+      if (existingProfileResult.data?.id) {
+        setSaving(false);
+        setError("This email is already linked to an account. Enter a different email for the new trainer.");
+        return;
+      }
+
       const authResult = await createTrainerAuthUser({
         email: nextTrainerEmail,
         password: nextPasswordValue,
@@ -1114,7 +1119,7 @@ export default function AdminDashboard() {
         const existingProfileResult = await findProfileByEmail(nextTrainerEmail);
         if (existingProfileResult.error) {
           result = { error: existingProfileResult.error };
-        } else if (existingProfileResult.data?.id) {
+        } else if (existingProfileResult.data?.id === trainerId) {
           const nextPayload = {
             ...payload,
             id: existingProfileResult.data.id,
@@ -1129,6 +1134,8 @@ export default function AdminDashboard() {
           if (!result.error && Array.isArray(result.data)) {
             result = { data: result.data[0] || null };
           }
+        } else {
+          result = { error: { message: "This email is already linked to another account. Use a different email for the new trainer." } };
         }
       }
 

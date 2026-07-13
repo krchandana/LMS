@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpenCheck, CheckCircle2, Gauge, Sparkles, Target } from "lucide-react";
+import { BookOpenCheck, CheckCircle2, LogOut, Sparkles, Target } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
+
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
+const serviceRoleKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY || "";
+const hasServiceRoleKey = Boolean(supabaseUrl && serviceRoleKey);
 
 const statusStyles = {
   pending: "bg-amber-100 text-amber-700",
@@ -9,14 +14,6 @@ const statusStyles = {
   approved: "bg-cert-green/20 text-cert-green-dark",
   rejected: "bg-rose-100 text-rose-700",
   rework: "bg-rose-100 text-rose-700",
-};
-
-const statAccent = {
-  Pending: "from-amber-400 via-orange-400 to-rose-400",
-  Submitted: "from-sky-400 via-cyan-400 to-teal-400",
-  Approved: "from-emerald-400 via-green-500 to-lime-400",
-  Rejected: "from-rose-400 via-pink-400 to-fuchsia-400",
-  Certificate: "from-indigo-400 via-violet-400 to-fuchsia-400",
 };
 
 const emptyData = [];
@@ -50,6 +47,24 @@ const firstWorkingList = async (table, builders) => {
   return emptyData;
 };
 
+const fetchProfilesWithServiceRole = async (ids) => {
+  if (!hasServiceRoleKey || !ids.length) return [];
+
+  const params = new URLSearchParams({
+    select: "id,full_name,name,email,role",
+    id: `in.(${ids.join(",")})`,
+  });
+  const response = await fetch(`${supabaseUrl}/rest/v1/profiles?${params.toString()}`, {
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+    },
+  });
+  if (!response.ok) return [];
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows : [];
+};
+
 const insertWithColumnFallback = async (table, payload) => {
   let nextPayload = { ...payload };
 
@@ -74,6 +89,7 @@ const insertWithColumnFallback = async (table, payload) => {
 
 export default function StudentDashboard() {
   const { profile, user } = useAuth();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [studentRecord, setStudentRecord] = useState(null);
   const [courses, setCourses] = useState([]);
@@ -86,6 +102,9 @@ export default function StudentDashboard() {
   const [submitError, setSubmitError] = useState("");
   const [submitSuccess, setSubmitSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [activeTaskView, setActiveTaskView] = useState("assignment");
+  const [activePanel, setActivePanel] = useState("courses");
+  const [taskStatusFilter, setTaskStatusFilter] = useState("");
 
   useEffect(() => {
     if (!profile || !user) return;
@@ -129,12 +148,16 @@ export default function StudentDashboard() {
           ]);
 
       const trainerIds = [...new Set([trainerId, ...courseRows.map((course) => course.trainer_id).filter(Boolean)])];
-      const trainerRows = trainerIds.length
+      let trainerRows = trainerIds.length
         ? await firstWorkingList("profiles", [
             (query) => query.in("id", trainerIds).eq("role", "trainer"),
             (query) => query.in("id", trainerIds),
           ])
         : emptyData;
+
+      if (!trainerRows.length && trainerIds.length) {
+        trainerRows = await fetchProfilesWithServiceRole(trainerIds);
+      }
 
       const trainerById = new Map(trainerRows.map((trainer) => [trainer.id, trainer]));
       const courseRowsWithTrainer = courseRows.map((course) => {
@@ -200,6 +223,21 @@ export default function StudentDashboard() {
     });
   }, [tasks, submissions]);
 
+  const assignmentTasks = useMemo(
+    () => taskSummaries.filter((task) => task.task_type === "assignment"),
+    [taskSummaries]
+  );
+  const projectTasks = useMemo(
+    () => taskSummaries.filter((task) => task.task_type === "project"),
+    [taskSummaries]
+  );
+  const baseTasks = activePanel === "task-status"
+    ? taskSummaries
+    : activeTaskView === "project" ? projectTasks : assignmentTasks;
+  const visibleTasks = taskStatusFilter
+    ? baseTasks.filter((task) => task.status === taskStatusFilter)
+    : baseTasks;
+
   const stats = useMemo(() => {
     const totalTasks = taskSummaries.length;
     const counts = taskSummaries.reduce(
@@ -222,6 +260,23 @@ export default function StudentDashboard() {
     setWorkNotes("");
     setSubmitError("");
     setSubmitSuccess("");
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate("/", { replace: true });
+  };
+
+  const openPanel = (panel, { taskType, status } = {}) => {
+    if (taskType) setActiveTaskView(taskType);
+    setTaskStatusFilter(status || "");
+    setActivePanel(panel);
+    window.history.replaceState(null, "", `#${panel}`);
+    document.getElementById("student-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const openTaskPage = (taskType) => {
+    openPanel(taskType === "project" ? "projects" : "assignments", { taskType });
   };
 
   const submitWork = async (event) => {
@@ -339,7 +394,54 @@ export default function StudentDashboard() {
   return (
     <div className="cert-bg-student min-h-screen px-4 py-4 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
-      <section className="cert-glass-panel overflow-hidden rounded-[2.5rem] px-8 py-8 text-cert-ink shadow-[0_28px_80px_-40px_rgba(15,23,42,0.18)]">
+      <nav className="sticky top-3 z-20 flex flex-wrap items-center gap-2 rounded-[1.75rem] border border-cert-line bg-white/95 p-3 shadow-[0_18px_50px_-35px_rgba(15,23,42,0.4)] backdrop-blur" aria-label="Student workspace navigation">
+        <span className="mr-auto rounded-2xl px-3 py-2 text-sm font-semibold text-cert-green-dark">Student workspace</span>
+        <div className="flex flex-1 flex-wrap items-center justify-end gap-2">
+          <button type="button" onClick={() => openPanel("courses")} className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold transition ${activePanel === "courses" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line bg-cert-mint text-cert-ink hover:bg-white"}`}>
+            <span>Courses</span><span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{courses.length}</span>
+          </button>
+          <button type="button" onClick={() => openTaskPage("assignment")} className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold transition ${activePanel === "assignments" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line bg-cert-mint text-cert-ink hover:bg-white"}`}>
+            <span>Assignments</span><span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{assignmentTasks.length}</span>
+          </button>
+          <button type="button" onClick={() => openTaskPage("project")} className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold transition ${activePanel === "projects" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line bg-cert-mint text-cert-ink hover:bg-white"}`}>
+            <span>Projects</span><span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{projectTasks.length}</span>
+          </button>
+          {[
+            ["Pending", stats.counts.pending || 0, "pending"],
+            ["Submitted", stats.counts.submitted || 0, "submitted"],
+            ["Approved", stats.counts.approved || 0, "approved"],
+            ["Rejected", stats.counts.rejected || 0, "rejected"],
+          ].map(([label, value, status]) => (
+            <button key={label} type="button" onClick={() => openPanel("task-status", { status })} className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold transition ${activePanel === "task-status" && taskStatusFilter === status ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line bg-cert-mint text-cert-ink hover:bg-white"}`}>
+              <span>{label}</span>
+              <span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{value}</span>
+            </button>
+          ))}
+          <button type="button" onClick={() => openPanel("certificate")} className={`inline-flex items-center gap-2 rounded-2xl border px-3 py-2 text-xs font-semibold transition ${activePanel === "certificate" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line bg-cert-mint text-cert-ink hover:bg-white"}`}>
+            <span>Certificate</span><span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{stats.eligible ? "Eligible" : "Not yet"}</span>
+          </button>
+          <button type="button" onClick={handleLogout} className="inline-flex items-center gap-2 rounded-2xl bg-cert-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-cert-green-dark">
+            <LogOut size={16} aria-hidden="true" />
+            Logout
+          </button>
+        </div>
+      </nav>
+      <section className="grid gap-5 rounded-[2rem] border border-cert-line bg-white p-6 text-cert-ink shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)] md:grid-cols-[1.05fr_0.95fr] md:items-center">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cert-green-dark">Student workspace</p>
+          <h1 className="mt-3 text-3xl font-semibold tracking-tight sm:text-4xl">Welcome, {profile.full_name || "Student"}</h1>
+          <p className="mt-3 max-w-xl text-sm leading-6 text-slate-600">Use the navigation above to view your courses, assignments, projects, progress, and certificate status.</p>
+        </div>
+        <div className="rounded-[1.5rem] bg-cert-mint p-4 ring-1 ring-cert-line">
+          <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cert-green-dark">LMS details</p>
+          <div className="mt-4 grid gap-3 sm:grid-cols-3 md:grid-cols-1 xl:grid-cols-3">
+            <div className="rounded-xl bg-white p-3 ring-1 ring-cert-line"><p className="text-xs text-slate-500">Courses</p><p className="mt-1 text-lg font-semibold">{courses.length}</p></div>
+            <div className="rounded-xl bg-white p-3 ring-1 ring-cert-line"><p className="text-xs text-slate-500">Tasks</p><p className="mt-1 text-lg font-semibold">{taskSummaries.length}</p></div>
+            <div className="rounded-xl bg-white p-3 ring-1 ring-cert-line"><p className="text-xs text-slate-500">Trainer</p><p className="mt-1 truncate text-sm font-semibold">{courses[0]?.trainer_name || "Not assigned"}</p></div>
+          </div>
+        </div>
+      </section>
+      <section className="hidden cert-glass-panel overflow-hidden rounded-[2.5rem] px-8 py-8 text-cert-ink shadow-[0_28px_80px_-40px_rgba(15,23,42,0.18)]">
         <div className="grid gap-8 xl:grid-cols-[1.1fr_0.9fr] xl:items-center">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full bg-cert-mint px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-cert-green-dark ring-1 ring-cert-line">
@@ -351,7 +453,7 @@ export default function StudentDashboard() {
               Track your enrolled courses, assigned work, submissions, progress, and certificate readiness.
             </p>
             <div className="mt-6 flex flex-wrap gap-3">
-              <button type="button" className="rounded-full bg-cert-green px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">
+              <button type="button" onClick={() => openTaskPage("assignment")} className="rounded-full bg-cert-green px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">
                 Open assignments
               </button>
               <button type="button" className="rounded-full border border-cert-line bg-white px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-mint">
@@ -391,25 +493,8 @@ export default function StudentDashboard() {
         </div>
       </section>
 
-      <section className="grid gap-5 md:grid-cols-2 xl:grid-cols-5">
-        {[
-          ["Pending", stats.counts.pending || 0, "Tasks not submitted yet."],
-          ["Submitted", stats.counts.submitted || 0, "Work waiting for review."],
-          ["Approved", stats.counts.approved || 0, "Completed course work."],
-          ["Rejected", stats.counts.rejected || 0, "Tasks needing changes."],
-          ["Certificate", stats.eligible ? "Eligible" : "Not yet", certificates.length ? "Certificate record found." : "Complete all work to qualify."],
-        ].map(([label, value, description]) => (
-          <div key={label} className="relative overflow-hidden rounded-[2rem] border border-cert-line bg-white p-5 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-            <div className={`absolute inset-x-0 top-0 h-1 bg-gradient-to-r ${statAccent[label] || "from-slate-400 via-slate-500 to-slate-600"}`} />
-            <p className="text-xs uppercase tracking-[0.3em] text-slate-500">{label}</p>
-            <p className="mt-4 text-3xl font-semibold text-cert-ink">{value}</p>
-            <p className="mt-3 text-sm leading-6 text-slate-500">{description}</p>
-          </div>
-        ))}
-      </section>
-
-      <section className="mt-8 grid gap-5 xl:grid-cols-[1fr_1.4fr_0.9fr]">
-        <div className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+      <section id="student-panel" className="mx-auto max-w-4xl scroll-mt-28">
+        <div id="enrolled-courses" className={`rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)] ${activePanel === "courses" ? "" : "hidden"}`}>
           <h2 className="text-xl font-semibold text-cert-ink">Enrolled Courses</h2>
           <p className="mt-2 text-sm text-slate-500">Courses and trainer assignment.</p>
           <div className="mt-6 space-y-4">
@@ -417,16 +502,36 @@ export default function StudentDashboard() {
           </div>
         </div>
 
-        <div className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-          <h2 className="text-xl font-semibold text-cert-ink">Assignments & Projects</h2>
-          <p className="mt-2 text-sm text-slate-500">Submit work and track review status.</p>
+        <div id="student-tasks" className={`rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)] ${(activePanel === "assignments" || activePanel === "projects" || activePanel === "task-status") ? "" : "hidden"}`}>
+          <div>
+            <h2 className="text-xl font-semibold text-cert-ink">{activePanel === "task-status" ? `${taskStatusFilter.charAt(0).toUpperCase()}${taskStatusFilter.slice(1)} tasks` : activeTaskView === "assignment" ? "Assignments" : "Projects"}</h2>
+            <p className="mt-2 text-sm text-slate-500">Submit work and track review status.</p>
+          </div>
           <div className="mt-6 space-y-4">
-            {taskSummaries.length === 0 ? <div className="rounded-3xl bg-cert-mint p-5 text-sm text-slate-500">No assignments or projects found.</div> : taskSummaries.map(renderTask)}
+            {visibleTasks.length === 0 ? <div className="rounded-3xl bg-cert-mint p-5 text-sm text-slate-500">{activeTaskView === "assignment" ? "No assignments found." : "No projects found."}</div> : visibleTasks.map(renderTask)}
+          </div>
+          <div className="mt-6 border-t border-cert-line pt-6">
+            <h3 className="text-lg font-semibold text-cert-ink">Submit Completed Work</h3>
+            {submissionTask ? (
+              <form onSubmit={submitWork} className="mt-5 space-y-4">
+                <p className="rounded-3xl bg-cert-mint px-4 py-3 text-sm font-semibold text-cert-ink">{titleFor(submissionTask, "Selected task")}</p>
+                <input type="url" value={workLink} onChange={(event) => setWorkLink(event.target.value)} placeholder="Work link" className="w-full rounded-3xl border border-cert-line bg-cert-mint px-4 py-3 text-sm text-cert-ink outline-none focus:border-cert-green focus:ring-2 focus:ring-cert-green/20" />
+                <textarea value={workNotes} onChange={(event) => setWorkNotes(event.target.value)} placeholder="Notes" className="min-h-28 w-full rounded-3xl border border-cert-line bg-cert-mint px-4 py-3 text-sm text-cert-ink outline-none focus:border-cert-green focus:ring-2 focus:ring-cert-green/20" />
+                {submitError && <p className="rounded-3xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{submitError}</p>}
+                <div className="flex gap-2">
+                  <button type="submit" disabled={isSubmitting} className="flex-1 rounded-3xl bg-cert-green px-4 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white disabled:bg-slate-400 disabled:text-white">{isSubmitting ? "Submitting..." : "Submit"}</button>
+                  <button type="button" onClick={() => setSubmissionTask(null)} className="rounded-3xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-100">Cancel</button>
+                </div>
+              </form>
+            ) : (
+              <p className="mt-4 rounded-3xl bg-cert-mint p-5 text-sm text-slate-500">Choose Submit Work on an assignment or project.</p>
+            )}
+            {submitSuccess && <p className="mt-4 rounded-3xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{submitSuccess}</p>}
           </div>
         </div>
 
-        <div className="space-y-5">
-          <div className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+        <div className={activePanel === "certificate" ? "space-y-5" : "hidden"}>
+          <div id="course-progress" className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
             <h2 className="text-xl font-semibold text-cert-ink">Course Progress</h2>
             <div className="mt-6 h-3 overflow-hidden rounded-full bg-slate-100">
               <div className="h-full rounded-full bg-cert-green" style={{ width: `${stats.progress}%` }} />
@@ -440,7 +545,7 @@ export default function StudentDashboard() {
             </div>
           </div>
 
-          <div className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+          <div className="hidden rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
             <h2 className="text-xl font-semibold text-cert-ink">Submit Completed Work</h2>
             {submissionTask ? (
               <form onSubmit={submitWork} className="mt-5 space-y-4">

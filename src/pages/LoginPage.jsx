@@ -341,6 +341,28 @@ const LoginPage = () => {
       return;
     }
 
+    const normalizedEmail = emailToUse.trim().toLowerCase();
+    if (hasServiceRoleKey) {
+      const [profileResult, requestResult] = await Promise.all([
+        serviceRoleTableRequest("profiles", `?select=id,status&email=eq.${encodeURIComponent(normalizedEmail)}&limit=1`, "GET"),
+        serviceRoleTableRequest("access_requests", `?select=id,status&email=eq.${encodeURIComponent(normalizedEmail)}&limit=1`, "GET"),
+      ]);
+      const existingProfile = Array.isArray(profileResult.data) ? profileResult.data[0] : null;
+      const existingRequest = Array.isArray(requestResult.data) ? requestResult.data[0] : null;
+
+      if (existingProfile || existingRequest) {
+        const status = (existingProfile?.status || existingRequest?.status || "pending").toLowerCase();
+        if (["active", "approved"].includes(status)) {
+          setError("An active student account already uses this email. Please sign in with the Student ID sent by admin.");
+        } else if (status === "rejected") {
+          setError("This registration was previously rejected. Please contact the admin before registering again.");
+        } else {
+          setSuccess("A registration request for this email is already pending admin approval.");
+        }
+        return;
+      }
+    }
+
     const studentId = generateStudentLoginId();
     const authEmail = studentAuthEmailFor(studentId);
     const temporaryPassword = `Pending@${Date.now().toString().slice(-6)}`;
@@ -383,6 +405,12 @@ const LoginPage = () => {
     if (authUser?.id) {
       const { error: profileError } = await upsertWithColumnFallback("profiles", profilePayload, { onConflict: "id" });
       if (profileError) {
+        const message = profileError.message || "";
+        if (message.includes("profiles_email_key")) {
+          await serviceRoleAuthRequest(`/users/${authUser.id}`, "DELETE");
+          setSuccess("A registration request for this email already exists. Please wait for admin approval.");
+          return;
+        }
         setError(profileError.message || "Unable to save the student request.");
         return;
       }
