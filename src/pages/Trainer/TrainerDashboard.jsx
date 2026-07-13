@@ -1,63 +1,17 @@
-import { useEffect, useState } from "react";
-import { CheckCircle2, Gauge, Sparkles, Target, UsersRound } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { BookOpenCheck, CheckCircle2, ClipboardCheck, LogOut, Plus, Sparkles, UsersRound } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
 
-const statAccent = {
-  "Assigned Students": "from-sky-400 via-cyan-400 to-teal-400",
-  "Active Courses": "from-emerald-400 via-green-400 to-lime-400",
-  "Pending Submissions": "from-amber-400 via-orange-400 to-rose-400",
-  "Approved Tasks": "from-emerald-400 via-green-500 to-teal-500",
-  "Rework Requests": "from-rose-400 via-pink-400 to-fuchsia-400",
-  "Assigned Projects": "from-indigo-400 via-violet-400 to-fuchsia-400",
-};
+const titleFor = (item, fallback = "Untitled") => item?.title || item?.name || item?.full_name || item?.email || fallback;
 
-const trainerStats = [
-  {
-    label: "Assigned Students",
-    table: "students",
-    description: "Students assigned to you.",
-    countQuery: (query, profile) => query.eq("trainer_id", profile.id),
-  },
-  {
-    label: "Active Courses",
-    table: "courses",
-    description: "Courses you are teaching.",
-    countQuery: (query, profile) => query.eq("trainer_id", profile.id).eq("status", "active"),
-  },
-  {
-    label: "Pending Submissions",
-    table: "submissions",
-    description: "Student work awaiting review.",
-    countQuery: (query, profile) => query.eq("trainer_id", profile.id).eq("status", "pending"),
-  },
-  {
-    label: "Approved Tasks",
-    table: "submissions",
-    description: "Work you have approved.",
-    countQuery: (query, profile) => query.eq("trainer_id", profile.id).eq("status", "approved"),
-  },
-  {
-    label: "Rework Requests",
-    table: "submissions",
-    description: "Submissions sent back for changes.",
-    countQuery: (query, profile) => query.eq("trainer_id", profile.id).eq("status", "rework"),
-  },
-  {
-    label: "Assigned Projects",
-    table: "projects",
-    description: "Course projects you have assigned.",
-    countQuery: (query, profile) => query.eq("trainer_id", profile.id),
-  },
-];
-
-const fetchList = async (table, queryBuilder) => {
+const fetchRows = async (table, buildQuery) => {
   try {
     let query = supabase.from(table).select("*");
-    if (queryBuilder) query = queryBuilder(query);
-    const { data, error } = await query.order("created_at", { ascending: false }).limit(5);
-    if (error) return [];
-    return data ?? [];
+    if (buildQuery) query = buildQuery(query);
+    const { data, error } = await query;
+    return error ? [] : data || [];
   } catch {
     return [];
   }
@@ -65,232 +19,257 @@ const fetchList = async (table, queryBuilder) => {
 
 export default function TrainerDashboard() {
   const { profile } = useAuth();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
-  const [stats, setStats] = useState([]);
+  const [courses, setCourses] = useState([]);
   const [students, setStudents] = useState([]);
-  const [submissions, setSubmissions] = useState([]);
+  const [enrollments, setEnrollments] = useState([]);
+  const [assignments, setAssignments] = useState([]);
   const [projects, setProjects] = useState([]);
+  const [submissions, setSubmissions] = useState([]);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [assignmentForm, setAssignmentForm] = useState({ courseId: "", title: "", description: "", dueDate: "" });
+  const [projectForm, setProjectForm] = useState({ courseId: "", studentId: "", title: "", description: "" });
+  const [reviewNotes, setReviewNotes] = useState({});
 
-  useEffect(() => {
-    if (!profile) return;
+  const loadDashboard = async () => {
+    if (!profile?.id) return;
+    setLoading(true);
+    const trainerCourses = await fetchRows("courses", (query) => query.eq("trainer_id", profile.id));
+    const courseIds = trainerCourses.map((course) => course.id).filter(Boolean);
+    const enrollmentRows = courseIds.length
+      ? await fetchRows("enrollments", (query) => query.in("course_id", courseIds))
+      : [];
+    const studentIds = [...new Set(enrollmentRows.map((row) => row.student_id).filter(Boolean))];
+    const studentRows = studentIds.length
+      ? await fetchRows("profiles", (query) => query.in("id", studentIds).eq("role", "student"))
+      : [];
+    const assignmentRows = courseIds.length
+      ? await fetchRows("assignments", (query) => query.in("course_id", courseIds).order("created_at", { ascending: false }))
+      : [];
+    const projectRows = courseIds.length
+      ? await fetchRows("projects", (query) => query.in("course_id", courseIds).order("submitted_at", { ascending: false }))
+      : [];
+    const assignmentIds = assignmentRows.map((assignment) => assignment.id).filter(Boolean);
+    const submissionRows = assignmentIds.length
+      ? await fetchRows("submissions", (query) => query.in("assignment_id", assignmentIds).order("submitted_at", { ascending: false }))
+      : [];
 
-    const loadData = async () => {
-      setLoading(true);
-
-      const statResults = await Promise.all(
-        trainerStats.map(async (item) => {
-          let query = supabase.from(item.table).select("*", { count: "exact", head: true });
-          if (item.countQuery) query = item.countQuery(query, profile);
-
-          const { count, error } = await query;
-          return {
-            ...item,
-            count: error ? null : count ?? 0,
-            error: error ? error.message : null,
-          };
-        })
-      );
-
-      const [studentRows, submissionRows, projectRows] = await Promise.all([
-        fetchList("students", (query) => query.eq("trainer_id", profile.id)),
-        fetchList("submissions", (query) => query.eq("trainer_id", profile.id).order("created_at", { ascending: false })),
-        fetchList("projects", (query) => query.eq("trainer_id", profile.id)),
-      ]);
-
-      setStats(statResults);
-      setStudents(studentRows);
-      setSubmissions(submissionRows);
-      setProjects(projectRows);
-      setLoading(false);
-    };
-
-    loadData();
-  }, [profile]);
-
-  const renderItem = (item) => {
-    const title = item.full_name || item.name || item.title || item.email || item.id || "Untitled";
-    return (
-      <div key={item.id ?? title} className="rounded-[1.75rem] border border-cert-line bg-white p-5 shadow-[0_14px_40px_-30px_rgba(15,23,42,0.28)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_48px_-32px_rgba(15,23,42,0.2)]">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="font-semibold text-cert-ink">{title}</p>
-            {item.email && <p className="text-sm text-slate-500">{item.email}</p>}
-          </div>
-          {item.status && (
-            <span className="rounded-full bg-cert-green/15 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cert-green-dark">
-              {item.status}
-            </span>
-          )}
-        </div>
-      </div>
-    );
+    setCourses(trainerCourses);
+    setEnrollments(enrollmentRows);
+    setStudents(studentRows);
+    setAssignments(assignmentRows);
+    setProjects(projectRows);
+    setSubmissions(submissionRows);
+    setLoading(false);
   };
 
-  if (!profile) {
-    return <div className="p-6 text-slate-700">Loading trainer profile...</div>;
+  useEffect(() => {
+    loadDashboard();
+  }, [profile?.id]);
+
+  const studentById = useMemo(() => new Map(students.map((student) => [String(student.id), student])), [students]);
+  const courseById = useMemo(() => new Map(courses.map((course) => [String(course.id), course])), [courses]);
+  const assignmentById = useMemo(() => new Map(assignments.map((assignment) => [String(assignment.id), assignment])), [assignments]);
+
+  const courseStudents = (courseId) => {
+    const ids = new Set(enrollments.filter((row) => String(row.course_id) === String(courseId)).map((row) => String(row.student_id)));
+    return students.filter((student) => ids.has(String(student.id)));
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate("/", { replace: true });
+  };
+
+  const createAssignment = async (event) => {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    if (!assignmentForm.courseId || !assignmentForm.title.trim()) {
+      setError("Select a course and enter an assignment title.");
+      return;
+    }
+    const { error: createError } = await supabase.from("assignments").insert({
+      course_id: assignmentForm.courseId,
+      trainer_id: profile.id,
+      title: assignmentForm.title.trim(),
+      description: assignmentForm.description.trim() || null,
+      due_date: assignmentForm.dueDate || null,
+      status: "active",
+    });
+    if (createError) {
+      setError(createError.message || "Unable to create assignment.");
+      return;
+    }
+    setAssignmentForm({ courseId: "", title: "", description: "", dueDate: "" });
+    setMessage("Assignment created for the selected course.");
+    await loadDashboard();
+  };
+
+  const createProject = async (event) => {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    if (!projectForm.courseId || !projectForm.studentId || !projectForm.title.trim()) {
+      setError("Select a course, student, and project title.");
+      return;
+    }
+    const { error: createError } = await supabase.from("projects").insert({
+      course_id: projectForm.courseId,
+      student_id: projectForm.studentId,
+      title: projectForm.title.trim(),
+      description: projectForm.description.trim() || null,
+      status: "pending",
+    });
+    if (createError) {
+      setError(createError.message || "Unable to assign project.");
+      return;
+    }
+    setProjectForm({ courseId: "", studentId: "", title: "", description: "" });
+    setMessage("Project assigned to the selected student.");
+    await loadDashboard();
+  };
+
+  const completeCourseIfReady = async (studentId, courseId) => {
+    const courseAssignments = await fetchRows("assignments", (query) => query.eq("course_id", courseId));
+    const studentSubmissions = await fetchRows("submissions", (query) => query.eq("student_id", studentId));
+    const studentProjects = await fetchRows("projects", (query) => query.eq("student_id", studentId).eq("course_id", courseId));
+    const assignmentComplete = courseAssignments.every((assignment) =>
+      studentSubmissions.some((submission) => String(submission.assignment_id) === String(assignment.id) && submission.status === "approved")
+    );
+    const projectComplete = studentProjects.every((project) => project.status === "approved");
+    if (!courseAssignments.length && !studentProjects.length) return;
+    if (!assignmentComplete || !projectComplete) return;
+
+    const enrollment = enrollments.find((row) => String(row.student_id) === String(studentId) && String(row.course_id) === String(courseId));
+    if (enrollment?.id) {
+      await supabase.from("enrollments").update({ enrollment_status: "completed" }).eq("id", enrollment.id);
+    }
+    const existingCertificate = await fetchRows("certificates", (query) => query.eq("student_id", studentId).eq("course_id", courseId));
+    if (!existingCertificate.length) {
+      await supabase.from("certificates").insert({
+        student_id: studentId,
+        course_id: courseId,
+        certificate_number: `CERT-${Date.now().toString().slice(-8)}`,
+        issue_date: new Date().toISOString().slice(0, 10),
+        status: "eligible",
+        issued_by: profile.id,
+      });
+    }
+  };
+
+  const reviewSubmission = async (submission, status) => {
+    setError("");
+    setMessage("");
+    const { error: reviewError } = await supabase.from("submissions").update({
+      status,
+      feedback: reviewNotes[submission.id] || null,
+      graded_by: profile.id,
+      graded_at: new Date().toISOString(),
+    }).eq("id", submission.id);
+    if (reviewError) {
+      setError(reviewError.message || "Unable to review submission.");
+      return;
+    }
+    const assignment = assignmentById.get(String(submission.assignment_id));
+    if (status === "approved" && assignment?.course_id) await completeCourseIfReady(submission.student_id, assignment.course_id);
+    setMessage(status === "approved" ? "Submission approved." : "Submission returned for rework.");
+    await loadDashboard();
+  };
+
+  const reviewProject = async (project, status) => {
+    setError("");
+    setMessage("");
+    const { error: reviewError } = await supabase.from("projects").update({
+      status,
+      review_feedback: reviewNotes[project.id] || null,
+      reviewed_by: profile.id,
+      reviewed_at: new Date().toISOString(),
+    }).eq("id", project.id);
+    if (reviewError) {
+      setError(reviewError.message || "Unable to review project.");
+      return;
+    }
+    if (status === "approved") await completeCourseIfReady(project.student_id, project.course_id);
+    setMessage(status === "approved" ? "Project approved." : "Project returned for rework.");
+    await loadDashboard();
+  };
+
+  if (!profile || loading) {
+    return <div className="cert-bg-trainer flex min-h-screen items-center justify-center p-6 text-cert-ink">Loading trainer workspace...</div>;
   }
 
-  if (loading) {
-    return (
-      <div className="cert-bg-trainer flex min-h-[calc(100vh-96px)] items-center justify-center px-4">
-        <div className="rounded-[2rem] border border-cert-line bg-white px-10 py-8 text-center shadow-[0_24px_70px_-45px_rgba(15,23,42,0.22)]">
-          <p className="text-lg font-semibold text-cert-ink">Loading trainer dashboard...</p>
-          <p className="mt-2 text-sm text-slate-500">Fetching your assigned students and tasks.</p>
-        </div>
-      </div>
-    );
-  }
+  const awaitingSubmissions = submissions.filter((submission) => (submission.status || "").toLowerCase() === "submitted");
+  const awaitingProjects = projects.filter((project) => (project.status || "").toLowerCase() === "submitted");
 
   return (
     <div className="cert-bg-trainer min-h-screen px-4 py-4 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
-      <section className="cert-glass-panel overflow-hidden rounded-[2.5rem] px-8 py-8 text-cert-ink shadow-[0_28px_80px_-40px_rgba(15,23,42,0.18)]">
-        <div className="grid gap-8 xl:grid-cols-[1.1fr_0.9fr] xl:items-center">
-          <div>
-            <div className="inline-flex items-center gap-2 rounded-full bg-cert-mint px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-cert-green-dark ring-1 ring-cert-line">
-              <Sparkles size={14} aria-hidden="true" />
-              Trainer dashboard
-            </div>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight sm:text-5xl">Hello, {profile.full_name || "Trainer"}</h1>
-            <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-600 sm:text-base">
-              Review your students and assignments, assign projects, and manage submission statuses from one place.
-            </p>
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button type="button" className="rounded-full bg-cert-green px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">
-                Open reviews
-              </button>
-              <button type="button" className="rounded-full border border-cert-line bg-white px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-mint">
-                View projects
-              </button>
-            </div>
-          </div>
-          <div className="grid gap-4 rounded-[2rem] bg-cert-mint p-5 ring-1 ring-cert-line sm:grid-cols-2 xl:grid-cols-1">
-            <div className="rounded-[1.5rem] bg-white p-4 ring-1 ring-cert-line">
-              <p className="text-xs uppercase tracking-[0.3em] text-cert-green-dark">Role</p>
-              <p className="mt-3 text-2xl font-semibold text-cert-ink">{profile.role}</p>
-              <p className="mt-2 text-sm text-slate-600">Your workspace for mentoring and reviews.</p>
-            </div>
-            <div className="rounded-[1.5rem] bg-white p-4 ring-1 ring-cert-line">
-              <p className="text-xs uppercase tracking-[0.3em] text-cert-green-dark">Current focus</p>
-              <p className="mt-3 text-lg font-semibold text-cert-ink">Student progress and feedback</p>
-              <p className="mt-2 text-sm text-slate-600">Use submissions and projects to guide outcomes.</p>
-            </div>
-            <div className="sm:col-span-2 xl:col-span-1 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
-              <div className="rounded-[1.25rem] bg-white p-4 ring-1 ring-cert-line">
-                <UsersRound size={18} className="text-cert-green-dark" aria-hidden="true" />
-                <p className="mt-3 text-sm font-semibold text-cert-ink">Students</p>
-                <p className="mt-1 text-sm text-slate-500">{students.length} recent</p>
-              </div>
-              <div className="rounded-[1.25rem] bg-white p-4 ring-1 ring-cert-line">
-                <Target size={18} className="text-cert-green-dark" aria-hidden="true" />
-                <p className="mt-3 text-sm font-semibold text-cert-ink">Submissions</p>
-                <p className="mt-1 text-sm text-slate-500">{submissions.length} pending flow</p>
-              </div>
-              <div className="rounded-[1.25rem] bg-white p-4 ring-1 ring-cert-line">
-                <CheckCircle2 size={18} className="text-cert-green-dark" aria-hidden="true" />
-                <p className="mt-3 text-sm font-semibold text-cert-ink">Projects</p>
-                <p className="mt-1 text-sm text-slate-500">{projects.length} tracked</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
+        <nav className="sticky top-3 z-20 flex items-center justify-between rounded-[1.75rem] border border-cert-line bg-white/95 p-3 shadow-[0_18px_50px_-35px_rgba(15,23,42,0.4)] backdrop-blur">
+          <span className="px-3 text-sm font-semibold text-cert-green-dark">Trainer workspace</span>
+          <button type="button" onClick={handleLogout} className="inline-flex items-center gap-2 rounded-2xl bg-cert-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-cert-green-dark">
+            <LogOut size={16} /> Logout
+          </button>
+        </nav>
 
-      <section className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-        {stats.map((item) => (
-          <div key={item.table + item.label} className="relative overflow-hidden rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)] transition hover:-translate-y-1">
-            <div className={`mb-5 h-1 rounded-full bg-gradient-to-r ${statAccent[item.label] || "from-slate-400 via-slate-500 to-slate-600"}`} />
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <p className="text-xs uppercase tracking-[0.3em] text-slate-500">{item.label}</p>
-                <p className="mt-4 text-4xl font-semibold text-cert-ink">{item.count === null ? "N/A" : item.count}</p>
-              </div>
-              <div className={`rounded-3xl bg-gradient-to-br ${statAccent[item.label] || "from-slate-400 via-slate-500 to-slate-600"} px-4 py-3 text-sm font-semibold text-white shadow-lg`}>
-                Tracker
-              </div>
+        <section className="cert-glass-panel rounded-[2.5rem] p-8 text-cert-ink shadow-[0_28px_80px_-40px_rgba(15,23,42,0.18)]">
+          <div className="flex flex-wrap items-start justify-between gap-6">
+            <div>
+              <p className="inline-flex items-center gap-2 rounded-full bg-cert-mint px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-cert-green-dark"><Sparkles size={14} /> Trainer dashboard</p>
+              <h1 className="mt-4 text-4xl font-semibold tracking-tight">Hello, {profile.full_name || "Trainer"}</h1>
+              <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-600">Create course work, review student submissions, and approve completed learning outcomes.</p>
             </div>
-            <p className="mt-4 text-sm leading-6 text-slate-500">{item.description}</p>
-            {item.error && <p className="mt-4 rounded-2xl bg-rose-50 px-3 py-2 text-sm text-rose-700">{item.error}</p>}
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="rounded-2xl bg-cert-mint px-4 py-3"><UsersRound size={18} className="mx-auto text-cert-green-dark" /><p className="mt-2 text-lg font-semibold">{students.length}</p><p className="text-xs text-slate-500">Students</p></div>
+              <div className="rounded-2xl bg-cert-mint px-4 py-3"><BookOpenCheck size={18} className="mx-auto text-cert-green-dark" /><p className="mt-2 text-lg font-semibold">{assignments.length}</p><p className="text-xs text-slate-500">Assignments</p></div>
+              <div className="rounded-2xl bg-cert-mint px-4 py-3"><ClipboardCheck size={18} className="mx-auto text-cert-green-dark" /><p className="mt-2 text-lg font-semibold">{awaitingSubmissions.length + awaitingProjects.length}</p><p className="text-xs text-slate-500">To review</p></div>
+            </div>
           </div>
-        ))}
-      </section>
+        </section>
 
-      <section className="mt-8 grid gap-5 xl:grid-cols-[1.8fr_1fr]">
-        <div className="space-y-5">
-          <div className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-semibold text-cert-ink">Assigned Students</h2>
-                <p className="mt-2 text-sm text-slate-500">Students currently assigned to you.</p>
-              </div>
-              <span className="rounded-full bg-cert-green/15 px-3 py-1 text-sm font-semibold text-cert-green-dark">
-                {students.length} recent
-              </span>
-            </div>
-            <div className="mt-6 space-y-4">
-              {students.length === 0 ? (
-                <div className="rounded-3xl bg-cert-mint p-5 text-sm text-slate-500">No assigned students found.</div>
-              ) : (
-                students.map(renderItem)
-              )}
-            </div>
-          </div>
+        {(error || message) && <p className={`rounded-2xl px-4 py-3 text-sm ${error ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>{error || message}</p>}
 
-          <div className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-semibold text-cert-ink">Pending Submissions</h2>
-                <p className="mt-2 text-sm text-slate-500">Review work that needs your attention.</p>
-              </div>
-              <span className="rounded-full bg-amber-100 px-3 py-1 text-sm font-semibold text-amber-700">
-                {submissions.length} recent
-              </span>
+        <section className="grid gap-5 xl:grid-cols-2">
+          <form onSubmit={createAssignment} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+            <h2 className="inline-flex items-center gap-2 text-xl font-semibold text-cert-ink"><Plus size={20} /> Create assignment</h2>
+            <div className="mt-5 grid gap-3">
+              <select value={assignmentForm.courseId} onChange={(e) => setAssignmentForm({ ...assignmentForm, courseId: e.target.value })} className="rounded-xl border border-cert-line bg-cert-mint px-4 py-3" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select>
+              <input value={assignmentForm.title} onChange={(e) => setAssignmentForm({ ...assignmentForm, title: e.target.value })} placeholder="Assignment title" className="rounded-xl border border-cert-line px-4 py-3" required />
+              <textarea value={assignmentForm.description} onChange={(e) => setAssignmentForm({ ...assignmentForm, description: e.target.value })} placeholder="Instructions" className="min-h-24 rounded-xl border border-cert-line px-4 py-3" />
+              <input type="date" value={assignmentForm.dueDate} onChange={(e) => setAssignmentForm({ ...assignmentForm, dueDate: e.target.value })} className="rounded-xl border border-cert-line px-4 py-3" />
+              <button className="rounded-xl bg-cert-green px-4 py-3 font-semibold text-cert-ink">Create assignment</button>
             </div>
-            <div className="mt-6 space-y-4">
-              {submissions.length === 0 ? (
-                <div className="rounded-3xl bg-cert-mint p-5 text-sm text-slate-500">No submissions ready for review.</div>
-              ) : (
-                submissions.map(renderItem)
-              )}
-            </div>
-          </div>
-        </div>
+          </form>
 
-        <div className="space-y-5">
-          <div className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-            <h2 className="text-xl font-semibold text-cert-ink">Assigned Projects</h2>
-            <p className="mt-2 text-sm text-slate-500">Projects required for course completion.</p>
-            <div className="mt-6 space-y-4">
-              {projects.length === 0 ? (
-                <div className="rounded-3xl bg-cert-mint p-5 text-sm text-slate-500">No assigned projects found.</div>
-              ) : (
-                projects.map(renderItem)
-              )}
+          <form onSubmit={createProject} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+            <h2 className="inline-flex items-center gap-2 text-xl font-semibold text-cert-ink"><Plus size={20} /> Assign project</h2>
+            <div className="mt-5 grid gap-3">
+              <select value={projectForm.courseId} onChange={(e) => setProjectForm({ ...projectForm, courseId: e.target.value, studentId: "" })} className="rounded-xl border border-cert-line bg-cert-mint px-4 py-3" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select>
+              <select value={projectForm.studentId} onChange={(e) => setProjectForm({ ...projectForm, studentId: e.target.value })} className="rounded-xl border border-cert-line bg-cert-mint px-4 py-3" required><option value="">Select enrolled student</option>{courseStudents(projectForm.courseId).map((student) => <option key={student.id} value={student.id}>{titleFor(student, "Student")}</option>)}</select>
+              <input value={projectForm.title} onChange={(e) => setProjectForm({ ...projectForm, title: e.target.value })} placeholder="Project title" className="rounded-xl border border-cert-line px-4 py-3" required />
+              <textarea value={projectForm.description} onChange={(e) => setProjectForm({ ...projectForm, description: e.target.value })} placeholder="Project instructions" className="min-h-24 rounded-xl border border-cert-line px-4 py-3" />
+              <button className="rounded-xl bg-cert-green px-4 py-3 font-semibold text-cert-ink">Assign project</button>
             </div>
-          </div>
+          </form>
+        </section>
 
-          <div className="rounded-[2rem] border border-cert-line bg-white p-6 text-cert-ink shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-            <h2 className="text-xl font-semibold">Trainer Actions</h2>
-            <p className="mt-2 text-sm text-slate-500">Create assignments, manage projects, and update completion status.</p>
-            <div className="mt-5 rounded-2xl bg-cert-mint px-4 py-3 text-sm text-slate-600">
-              <p className="font-semibold text-cert-ink">Guidance</p>
-              <p className="mt-1">Prioritize pending submissions first, then assign next-step projects.</p>
-            </div>
-            <div className="mt-6 grid gap-3">
-              <button className="w-full rounded-3xl bg-cert-green px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">
-                Create Assignment
-              </button>
-              <button className="w-full rounded-3xl border border-cert-line bg-white px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-mint">
-                Assign Project
-              </button>
-              <button className="w-full rounded-3xl border border-cert-line bg-cert-mint px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-white">
-                Review Submissions
-              </button>
-            </div>
+        <section className="grid gap-5 xl:grid-cols-2">
+          <div className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+            <h2 className="text-xl font-semibold text-cert-ink">Assignment submissions</h2>
+            <div className="mt-5 space-y-4">{awaitingSubmissions.length === 0 ? <p className="rounded-2xl bg-cert-mint p-4 text-sm text-slate-500">No assignment submissions awaiting review.</p> : awaitingSubmissions.map((submission) => <ReviewCard key={submission.id} title={titleFor(assignmentById.get(String(submission.assignment_id)), "Assignment")} student={titleFor(studentById.get(String(submission.student_id)), "Student")} link={submission.submission_url} notes={reviewNotes[submission.id]} onNotes={(value) => setReviewNotes({ ...reviewNotes, [submission.id]: value })} onApprove={() => reviewSubmission(submission, "approved")} onRework={() => reviewSubmission(submission, "rework")} />)}</div>
           </div>
-        </div>
-      </section>
+          <div className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+            <h2 className="text-xl font-semibold text-cert-ink">Project reviews</h2>
+            <div className="mt-5 space-y-4">{awaitingProjects.length === 0 ? <p className="rounded-2xl bg-cert-mint p-4 text-sm text-slate-500">No projects awaiting review.</p> : awaitingProjects.map((project) => <ReviewCard key={project.id} title={titleFor(project, "Project")} student={titleFor(studentById.get(String(project.student_id)), "Student")} link={project.github_url || project.project_file_url} notes={reviewNotes[project.id]} onNotes={(value) => setReviewNotes({ ...reviewNotes, [project.id]: value })} onApprove={() => reviewProject(project, "approved")} onRework={() => reviewProject(project, "rework")} />)}</div>
+          </div>
+        </section>
       </div>
     </div>
   );
+}
+
+function ReviewCard({ title, student, link, notes, onNotes, onApprove, onRework }) {
+  return <article className="rounded-2xl border border-cert-line bg-cert-mint p-4"><p className="font-semibold text-cert-ink">{title}</p><p className="mt-1 text-sm text-slate-600">Student: {student}</p>{link && <a href={link} target="_blank" rel="noreferrer" className="mt-2 inline-block text-sm font-semibold text-cert-green-dark underline">Open submitted work</a>}<textarea value={notes || ""} onChange={(e) => onNotes(e.target.value)} placeholder="Feedback for the student" className="mt-3 min-h-20 w-full rounded-xl border border-cert-line bg-white px-3 py-2 text-sm" /><div className="mt-3 flex gap-2"><button type="button" onClick={onApprove} className="rounded-xl bg-cert-green px-3 py-2 text-sm font-semibold text-cert-ink">Approve</button><button type="button" onClick={onRework} className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">Request rework</button></div></article>;
 }

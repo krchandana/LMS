@@ -16,6 +16,7 @@ const isAuthServiceUnavailable = (error) => {
 
 const normalizeStudentId = (studentId) => studentId.trim().toUpperCase();
 const studentAuthEmailFor = (studentId) => `${normalizeStudentId(studentId).toLowerCase()}@student.local`;
+const generateStudentLoginId = () => `STU${Math.floor(10000 + Math.random() * 90000)}`;
 
 const isMissingTableError = (error) =>
   error?.message?.toLowerCase().includes("could not find the table") ||
@@ -78,38 +79,24 @@ const queryTrainerEmailInTable = async (table, search, requireRole = false) => {
   return null;
 };
 
-const findTrainerEmailByName = async (trainerIdentifier) => {
-  // Support trainer ID (exact) or email input.
-  const normalized = (trainerIdentifier || "").trim();
+const findTrainerEmailByName = async (trainerName) => {
+  const normalized = (trainerName || "").trim();
   if (!normalized) return null;
 
-  if (normalized.includes("@")) return normalized;
-
   try {
-    const { data: profileByLogin, error: pLoginErr } = await supabase
-      .from("profiles")
-      .select("email")
-      .ilike("trainer_login_id", normalized)
-      .limit(1);
-    if (!pLoginErr && Array.isArray(profileByLogin) && profileByLogin.length > 0) return profileByLogin[0].email;
-
-    const { data: profileById, error: pIdErr } = await supabase.from("profiles").select("email").eq("id", normalized).limit(1);
-    if (!pIdErr && Array.isArray(profileById) && profileById.length > 0) return profileById[0].email;
-
-    const { data: trainerByLogin, error: tLoginErr } = await supabase
-      .from("trainers")
-      .select("email")
-      .ilike("trainer_login_id", normalized)
-      .limit(1);
-    if (!tLoginErr && Array.isArray(trainerByLogin) && trainerByLogin.length > 0) return trainerByLogin[0].email;
-
-    const { data: trainerById, error: tIdErr } = await supabase.from("trainers").select("email").eq("id", normalized).limit(1);
-    if (!tIdErr && Array.isArray(trainerById) && trainerById.length > 0) return trainerById[0].email;
-
-    // Fallback: fuzzy name lookup for older records without trainer_login_id
-    const profileEmail = await queryTrainerEmailInTable("profiles", `%${normalized}%`, true);
+    const profileEmail = await queryTrainerEmailInTable("profiles", normalized, true);
     if (profileEmail) return profileEmail;
-    return queryTrainerEmailInTable("trainers", `%${normalized}%`, false);
+    const trainerEmail = await queryTrainerEmailInTable("trainers", normalized, false);
+    if (trainerEmail) return trainerEmail;
+
+    if (!hasServiceRoleKey) return null;
+    const serviceResult = await serviceRoleTableRequest(
+      "profiles",
+      `?select=email&full_name=ilike.${encodeURIComponent(normalized)}&role=eq.trainer&limit=1`,
+      "GET"
+    );
+    if (serviceResult.error || !Array.isArray(serviceResult.data)) return null;
+    return serviceResult.data[0]?.email || null;
   } catch (err) {
     if (isMissingTableError(err)) return null;
     throw err;
@@ -312,16 +299,16 @@ const LoginPage = () => {
     setError("");
     setSuccess("");
 
-    const trainerIdentifier = credential.trim();
-    if (!trainerIdentifier) {
-      setError("Please enter your trainer ID first.");
+    const trainerName = credential.trim();
+    if (!trainerName) {
+      setError("Please enter your full name first.");
       return;
     }
 
     setIsResetting(true);
     let trainerEmail;
     try {
-      trainerEmail = await findTrainerEmailByName(trainerIdentifier);
+      trainerEmail = await findTrainerEmailByName(trainerName);
     } catch (err) {
       setError(err?.message || "Unable to look up the trainer account.");
       setIsResetting(false);
@@ -329,7 +316,7 @@ const LoginPage = () => {
     }
 
     if (!trainerEmail) {
-      setError("Trainer not found. Please use the ID assigned by admin.");
+      setError("Trainer not found. Please use the full name saved by admin.");
       setIsResetting(false);
       return;
     }
@@ -354,7 +341,7 @@ const LoginPage = () => {
       return;
     }
 
-    const studentId = `STU${Date.now().toString().slice(-8)}`;
+    const studentId = generateStudentLoginId();
     const authEmail = studentAuthEmailFor(studentId);
     const temporaryPassword = `Pending@${Date.now().toString().slice(-6)}`;
 
@@ -450,7 +437,7 @@ const LoginPage = () => {
     }
 
     if (!emailToUse) {
-      setError(role === "trainer" ? "Please enter your trainer ID." : role === "student" ? "Please enter your Student ID." : "Please enter your email.");
+      setError(role === "trainer" ? "Please enter your full name." : role === "student" ? "Please enter your Student ID." : "Please enter your email.");
       setIsSubmitting(false);
       return;
     }
@@ -466,7 +453,7 @@ const LoginPage = () => {
       }
 
       if (!trainerEmail) {
-        setError("Trainer not found. Please use the ID assigned by admin.");
+        setError("Trainer not found. Please use the full name saved by admin.");
         setIsSubmitting(false);
         return;
       }
@@ -732,18 +719,18 @@ const LoginPage = () => {
               )}
               <div>
                 <label className="block text-sm font-medium text-slate-700">
-                  {role === "trainer" ? "Trainer ID" : role === "student" && studentMode !== "register" ? "Student ID" : "Email"}
+                  {role === "trainer" ? "Full name" : role === "student" && studentMode !== "register" ? "Student ID" : "Email"}
                 </label>
                 <input
                   type={role === "student" && studentMode !== "register" ? "text" : role === "trainer" ? "text" : "email"}
                   value={role === "student" && studentMode === "register" ? studentEmail : credential}
                   onChange={(e) => role === "student" && studentMode === "register" ? setStudentEmail(e.target.value) : setCredential(e.target.value)}
-                  placeholder={role === "student" && studentMode !== "register" ? "Example: STU12345678" : role === "trainer" ? "Enter trainer ID" : "your@email.com"}
+                  placeholder={role === "student" && studentMode !== "register" ? "Example: STU12345678" : role === "trainer" ? "Enter your full name" : "your@email.com"}
                   className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-cert-ink outline-none transition focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
                   required
                 />
                 {role === "trainer" && (
-                  <p className="mt-2 text-sm text-slate-500">Use the trainer ID assigned by admin.</p>
+                  <p className="mt-2 text-sm text-slate-500">Use the full name saved by admin when your account was created.</p>
                 )}
               </div>
               {(role !== "student" || (studentMode !== "reset" && studentMode !== "register")) && (

@@ -3,6 +3,9 @@ import { ArrowRight, Eye, EyeOff, ShieldCheck, Sparkles, Users, BookOpen } from 
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
 
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
+const serviceRoleKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY || "";
+
 const isMissingTableError = (error) => {
   const message = (error?.message || "").toLowerCase();
   return message.includes("could not find the table") || message.includes("relation") && message.includes("does not exist");
@@ -65,40 +68,34 @@ const queryTrainerEmailInTable = async (table, search, requireRole = false) => {
   return null;
 };
 
-const findTrainerEmailByName = async (trainerIdentifier) => {
-  // Trainer login now accepts a trainer ID (exact match) or an email address.
-  const normalized = (trainerIdentifier || "").trim();
+const findTrainerEmailByName = async (trainerName) => {
+  const normalized = (trainerName || "").trim();
   if (!normalized) return null;
 
-  // If the user entered an email, use it directly.
-  if (normalized.includes("@")) return normalized;
-
-  // Try different exact-match columns: trainer_login_id (case-insensitive), id
   try {
-    const { data: profileByLogin, error: pLoginErr } = await supabase
-      .from("profiles")
-      .select("email")
-      .ilike("trainer_login_id", normalized)
-      .limit(1);
-    if (!pLoginErr && Array.isArray(profileByLogin) && profileByLogin.length > 0) return profileByLogin[0].email;
-
-    const { data: profileById, error: pIdErr } = await supabase.from("profiles").select("email").eq("id", normalized).limit(1);
-    if (!pIdErr && Array.isArray(profileById) && profileById.length > 0) return profileById[0].email;
-
-    const { data: trainerByLogin, error: tLoginErr } = await supabase
-      .from("trainers")
-      .select("email")
-      .ilike("trainer_login_id", normalized)
-      .limit(1);
-    if (!tLoginErr && Array.isArray(trainerByLogin) && trainerByLogin.length > 0) return trainerByLogin[0].email;
-
-    const { data: trainerById, error: tIdErr } = await supabase.from("trainers").select("email").eq("id", normalized).limit(1);
-    if (!tIdErr && Array.isArray(trainerById) && trainerById.length > 0) return trainerById[0].email;
-
-    // Fallback: try fuzzy name lookup for older records that may not have trainer_login_id
-    const profileEmail = await queryTrainerEmailInTable("profiles", `%${normalized}%`, true);
+    const profileEmail = await queryTrainerEmailInTable("profiles", normalized, true);
     if (profileEmail) return profileEmail;
-    return queryTrainerEmailInTable("trainers", `%${normalized}%`, false);
+
+    const trainerEmail = await queryTrainerEmailInTable("trainers", normalized, false);
+    if (trainerEmail) return trainerEmail;
+
+    if (!supabaseUrl || !serviceRoleKey) return null;
+    const params = new URLSearchParams({
+      select: "email",
+      full_name: `ilike.${normalized}`,
+      role: "eq.trainer",
+      limit: "1",
+    });
+    const response = await fetch(`${supabaseUrl}/rest/v1/profiles?${params.toString()}`, {
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+      },
+    });
+    if (!response.ok) return null;
+
+    const profiles = await response.json();
+    return Array.isArray(profiles) && profiles[0]?.email ? profiles[0].email : null;
   } catch (err) {
     if (isMissingTableError(err)) return null;
     throw err;
@@ -123,7 +120,7 @@ const TrainerLogin = () => {
 
     const normalizedId = trainerName.trim();
     if (!normalizedId) {
-      setError("Please enter your trainer ID.");
+      setError("Please enter your full name.");
       setIsSubmitting(false);
       return;
     }
@@ -137,7 +134,7 @@ const TrainerLogin = () => {
       return;
     }
     if (!trainerEmail) {
-      setError("Trainer not found. Please use the ID assigned by admin.");
+      setError("Trainer not found. Please use the full name saved by admin.");
       setIsSubmitting(false);
       return;
     }
@@ -163,7 +160,7 @@ const TrainerLogin = () => {
 
     const normalizedId = trainerName.trim();
     if (!normalizedId) {
-      setError("Please enter your trainer ID first.");
+      setError("Please enter your full name first.");
       return;
     }
 
@@ -179,7 +176,7 @@ const TrainerLogin = () => {
     }
 
     if (!trainerEmail) {
-      setError("Trainer not found. Please use the ID assigned by admin.");
+      setError("Trainer not found. Please use the full name saved by admin.");
       setIsResetting(false);
       return;
     }
@@ -246,16 +243,16 @@ const TrainerLogin = () => {
 
             <form onSubmit={handleLogin} className="mt-8 space-y-5">
               <div>
-                <label className="mb-2 block text-sm font-medium text-cert-ink">Trainer ID</label>
+                <label className="mb-2 block text-sm font-medium text-cert-ink">Full name</label>
                 <input
                   type="text"
-                  placeholder="Enter trainer ID"
+                  placeholder="Enter your full name"
                   value={trainerName}
                   onChange={(e) => setTrainerName(e.target.value)}
                   className="w-full rounded-3xl border border-cert-line bg-cert-mint px-4 py-3 text-cert-ink outline-none focus:border-cert-green focus:ring-2 focus:ring-cert-green/20"
                   required
                 />
-                <p className="mt-2 text-sm text-slate-500">Use the trainer ID created by admin.</p>
+                <p className="mt-2 text-sm text-slate-500">Use the full name saved by admin when your account was created.</p>
               </div>
 
               <div>

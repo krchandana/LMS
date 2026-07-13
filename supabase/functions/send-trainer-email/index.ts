@@ -18,6 +18,14 @@ const escapeHtml = (value: string) =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+const validLoginUrl = (value: string) => {
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) ? url.toString() : "";
+  } catch {
+    return "";
+  }
+};
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -34,10 +42,11 @@ serve(async (req) => {
     const name = requiredString(body.name);
     const password = requiredString(body.password);
     const trainerId = requiredString(body.trainerId);
+    const loginUrl = validLoginUrl(requiredString(body.loginUrl));
 
-    if (!email || !name || !password) {
+    if (!email || !name || !password || !trainerId) {
       return Response.json(
-        { error: "Missing email, name, or password." },
+        { error: "Missing email, name, Trainer ID, or password." },
         { status: 400, headers: corsHeaders },
       );
     }
@@ -68,7 +77,14 @@ serve(async (req) => {
 
     const safeName = escapeHtml(name);
     const safePassword = escapeHtml(password);
-    const safeTrainerId = escapeHtml(trainerId || "N/A");
+    const safeTrainerId = escapeHtml(trainerId);
+    const safeLoginUrl = escapeHtml(loginUrl);
+    const loginDetails = loginUrl
+      ? ["", `Sign in: ${loginUrl}`]
+      : ["", "Sign in from the trainer portal using the login name and password above."];
+    const loginHtml = loginUrl
+      ? `<p><a href="${safeLoginUrl}">Sign in to the trainer portal</a></p>`
+      : "<p>Sign in from the trainer portal using the login name and password above.</p>";
 
     await transporter.sendMail({
       from: fromEmail,
@@ -79,20 +95,21 @@ serve(async (req) => {
         "",
         "Your trainer account has been created.",
         "",
-        `Trainer ID: ${trainerId || "N/A"}`,
-        `Email: ${email}`,
+        `Login name: ${name}`,
+        `Trainer ID: ${trainerId}`,
+        `Login email: ${email}`,
         `Password: ${password}`,
-        "",
-        "You can now log in to the trainer portal.",
+        ...loginDetails,
       ].join("\n"),
       html: `
         <h2>Trainer account created</h2>
         <p>Hello ${safeName},</p>
         <p>Your trainer account has been created.</p>
+        <p><strong>Login name:</strong> ${safeName}</p>
         <p><strong>Trainer ID:</strong> ${safeTrainerId}</p>
-        <p><strong>Email:</strong> ${escapeHtml(email)}</p>
+        <p><strong>Login email:</strong> ${escapeHtml(email)}</p>
         <p><strong>Password:</strong> ${safePassword}</p>
-        <p>You can now log in to the trainer portal.</p>
+        ${loginHtml}
       `,
     });
 

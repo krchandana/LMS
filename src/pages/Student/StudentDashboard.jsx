@@ -112,10 +112,8 @@ export default function StudentDashboard() {
       const trainerId = student.trainer_id || profile.trainer_id;
       const directCourseIds = [student.course_id, student.course, profile.course_id].filter(Boolean);
 
-      const enrollmentRows = await firstWorkingList("student_courses", [
+      const enrollmentRows = await firstWorkingList("enrollments", [
         (query) => query.in("student_id", studentIds),
-        (query) => query.in("profile_id", studentIds),
-        (query) => query.eq("email", profile.email || user.email),
       ]);
       const enrolledCourseIds = [...new Set([...directCourseIds, ...enrollmentRows.map((row) => row.course_id || row.id).filter(Boolean)])];
 
@@ -196,7 +194,7 @@ export default function StudentDashboard() {
 
     return tasks.map((task) => {
       const taskId = task.id || task.assignment_id || task.project_id;
-      const submission = submissionByTask.get(taskId);
+      const submission = task.task_type === "project" ? task : submissionByTask.get(taskId);
       const status = normalizeStatus(submission?.status || task.status || "pending");
       return { ...task, taskId, submission, status };
     });
@@ -243,23 +241,28 @@ export default function StudentDashboard() {
 
     setIsSubmitting(true);
 
-    const payload = {
-      student_id: studentRecord?.id || profile.id,
-      profile_id: profile.id,
-      student_email: profile.email || user.email,
-      trainer_id: submissionTask.trainer_id || studentRecord?.trainer_id || profile.trainer_id || null,
-      course_id: submissionTask.course_id || studentRecord?.course_id || profile.course_id || null,
-      assignment_id: submissionTask.task_type === "assignment" ? submissionTask.taskId : null,
-      project_id: submissionTask.task_type === "project" ? submissionTask.taskId : null,
-      task_id: submissionTask.taskId,
-      title: titleFor(submissionTask, "Student submission"),
-      work_url: workLink.trim() || null,
-      file_url: workLink.trim() || null,
-      notes: workNotes.trim() || null,
-      status: "submitted",
-    };
+    const isProject = submissionTask.task_type === "project";
+    const payload = isProject
+      ? {
+          github_url: workLink.trim() || null,
+          project_file_url: workLink.trim() || null,
+          review_feedback: workNotes.trim() || null,
+          status: "submitted",
+          submitted_at: new Date().toISOString(),
+        }
+      : {
+          student_id: studentRecord?.id || profile.id,
+          assignment_id: submissionTask.taskId,
+          submission_url: workLink.trim() || null,
+          feedback: workNotes.trim() || null,
+          status: "submitted",
+          submitted_at: new Date().toISOString(),
+        };
 
-    const { data, error } = await insertWithColumnFallback("submissions", payload);
+    const result = isProject
+      ? await supabase.from("projects").update(payload).eq("id", submissionTask.taskId).select().single()
+      : await insertWithColumnFallback("submissions", payload);
+    const { data, error } = result;
     setIsSubmitting(false);
 
     if (error) {
@@ -267,7 +270,11 @@ export default function StudentDashboard() {
       return;
     }
 
-    setSubmissions((prev) => [data, ...prev]);
+    if (isProject) {
+      setTasks((prev) => prev.map((task) => (task.id === data.id ? { ...task, ...data } : task)));
+    } else {
+      setSubmissions((prev) => [data, ...prev]);
+    }
     setSubmissionTask(null);
     setWorkLink("");
     setWorkNotes("");

@@ -169,7 +169,7 @@ const getAuthErrorMessage = (error, fallback = "Unable to create trainer login a
   return message || fallback;
 };
 
-const createTrainerAuthUser = async ({ email, password, fullName, status }) => {
+const createTrainerAuthUser = async ({ email, password, fullName, status, trainerReferenceId }) => {
   if (hasServiceRoleKey) {
     const createResult = await serviceRoleAuthRequest("/users", "POST", {
       email,
@@ -179,6 +179,7 @@ const createTrainerAuthUser = async ({ email, password, fullName, status }) => {
         full_name: fullName,
         role: "trainer",
         status,
+        trainer_reference_id: trainerReferenceId,
       },
     });
 
@@ -212,6 +213,7 @@ const createTrainerAuthUser = async ({ email, password, fullName, status }) => {
         full_name: fullName,
         role: "trainer",
         status,
+        trainer_reference_id: trainerReferenceId,
       },
     });
 
@@ -229,6 +231,7 @@ const createTrainerAuthUser = async ({ email, password, fullName, status }) => {
         full_name: fullName,
         role: "trainer",
         status,
+        trainer_reference_id: trainerReferenceId,
       },
     },
   });
@@ -238,7 +241,7 @@ const createTrainerAuthUser = async ({ email, password, fullName, status }) => {
   return { data: data.user };
 };
 
-const sendTrainerCredentialsEmail = async ({ email, name, password, trainerId }) => {
+const sendTrainerCredentialsEmail = async ({ email, name, password, trainerId, loginUrl }) => {
   const safeEmail = (email || "").trim();
   if (!safeEmail || safeEmail.endsWith("@trainer.local")) return { skipped: true };
 
@@ -248,6 +251,7 @@ const sendTrainerCredentialsEmail = async ({ email, name, password, trainerId })
       name,
       password,
       trainerId,
+      loginUrl,
     },
   });
 
@@ -262,6 +266,7 @@ const normalizeStudentId = (studentId) => {
 };
 
 const studentAuthEmailFor = (studentId) => `${normalizeStudentId(studentId).toLowerCase()}@student.local`;
+const generateStudentLoginId = () => `STU${Math.floor(10000 + Math.random() * 90000)}`;
 
 const generateStudentPassword = () => `Stud@${Date.now().toString().slice(-6)}${Math.floor(10 + Math.random() * 90)}`;
 
@@ -302,11 +307,13 @@ const generateTrainerPassword = () => {
   return picked.join(" ");
 };
 
-const generateTrainerLoginId = (length = 8) => {
-  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // exclude ambiguous chars
-  let out = "";
-  for (let i = 0; i < length; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  return out;
+const generateTrainerReferenceId = () => {
+  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+  let value = "TRN-";
+  for (let index = 0; index < 8; index += 1) {
+    value += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return value;
 };
 
 const sendStudentApprovalEmail = async ({ email, name, studentId, password }) => {
@@ -394,16 +401,20 @@ const serviceRoleUpsert = async (table, payload, onConflict = "id") => {
 
 const insertWithServiceFallback = async (table, payload) => {
   let result = await safeInsert(table, payload);
-  if (result.skipped && hasServiceRoleKey) {
-    result = await serviceRoleInsert(table, payload);
+  if ((result.skipped || result.error) && hasServiceRoleKey) {
+    const serviceResult = await serviceRoleInsert(table, payload);
+    if (!serviceResult.error) return serviceResult;
+    if (result.skipped) return serviceResult;
   }
   return result;
 };
 
 const upsertWithServiceFallback = async (table, payload, onConflict = "id") => {
   let result = await safeUpsert(table, payload, onConflict);
-  if (result.skipped && hasServiceRoleKey) {
-    result = await serviceRoleUpsert(table, payload, onConflict);
+  if ((result.skipped || result.error) && hasServiceRoleKey) {
+    const serviceResult = await serviceRoleUpsert(table, payload, onConflict);
+    if (!serviceResult.error) return serviceResult;
+    if (result.skipped) return serviceResult;
   }
   return result;
 };
@@ -595,6 +606,10 @@ export default function AdminDashboard() {
         .select("*")
         .limit(1000);
 
+      const enrollmentServiceRes = (hasServiceRoleKey && (enrollmentRes.error || !(enrollmentRes.data || []).length))
+        ? await serviceRoleTableRequest("enrollments", "?select=*&limit=1000", "GET")
+        : { data: [], error: null };
+
       const studentCourseRes = await supabase
         .from("student_courses")
         .select("*")
@@ -676,7 +691,11 @@ export default function AdminDashboard() {
         : (studentsServiceRes.error ? [] : (Array.isArray(studentsServiceRes.data) ? studentsServiceRes.data : [])));
       const nextCourses = coursesRes.error ? [] : (coursesRes.data || []);
       const nextStudentRecords = studentRes.error ? [] : (studentRes.data || []);
-      const nextEnrollmentRows = enrollmentRes.error ? [] : (enrollmentRes.data || []);
+      const nextEnrollmentRows = enrollmentRes.error
+        ? (enrollmentServiceRes.error ? [] : (Array.isArray(enrollmentServiceRes.data) ? enrollmentServiceRes.data : []))
+        : ((enrollmentRes.data || []).length
+          ? (enrollmentRes.data || [])
+          : (enrollmentServiceRes.error ? [] : (Array.isArray(enrollmentServiceRes.data) ? enrollmentServiceRes.data : [])));
       const nextStudentCourseRows = nextEnrollmentRows.length ? nextEnrollmentRows : (studentCourseRes.error ? [] : (studentCourseRes.data || []));
 
       setRequests(nextRequests);
@@ -701,6 +720,11 @@ export default function AdminDashboard() {
 
   const courseNameById = useMemo(
     () => new Map(courses.map((course) => [String(course.id), firstValue(course.title, course.name, course.course_name, "Untitled course")])),
+    [courses]
+  );
+
+  const courseById = useMemo(
+    () => new Map(courses.map((course) => [String(course.id), course])),
     [courses]
   );
 
@@ -768,13 +792,16 @@ export default function AdminDashboard() {
         const studentRecord = studentRecordByProfile.get(String(student.id));
         const record = enrollmentRecord || studentRecord;
         const courseId = firstValue(student.course_id, enrollmentRecord?.course_id, studentRecord?.course_id);
-        const trainerId = firstValue(student.trainer_id, enrollmentRecord?.trainer_id, studentRecord?.trainer_id);
+        const course = courseById.get(String(courseId));
+        const trainerId = firstValue(student.trainer_id, enrollmentRecord?.trainer_id, studentRecord?.trainer_id, course?.trainer_id);
         const progress = Number(
           firstValue(enrollmentRecord?.completion_percent, enrollmentRecord?.progress_percent, studentRecord?.completion_percent, studentRecord?.progress_percent, student.completion_percent, 0)
         ) || 0;
 
         return {
           ...student,
+          course_id: courseId,
+          trainer_id: trainerId,
           student_id: firstValue(student.student_id, student.student_login_id, enrollmentRecord?.student_id, enrollmentRecord?.student_login_id, studentRecord?.student_id, studentRecord?.student_login_id),
           enrolled_course: firstValue(
             student.course_name,
@@ -799,7 +826,18 @@ export default function AdminDashboard() {
           ),
         };
       }),
-    [students, studentRecordByProfile, enrollmentByProfile, courseNameById, trainerNameById]
+    [students, studentRecordByProfile, enrollmentByProfile, courseById, courseNameById, trainerNameById]
+  );
+
+  const courseAssignments = useMemo(
+    () =>
+      courses.map((course) => ({
+        ...course,
+        course_name: firstValue(course.title, course.name, course.course_name, "Untitled course"),
+        trainer_name: trainerNameById.get(String(course.trainer_id)) || "Unassigned",
+        assigned_students: enrichedStudents.filter((student) => String(student.course_id) === String(course.id)),
+      })),
+    [courses, enrichedStudents, trainerNameById]
   );
 
   const metrics = useMemo(() => {
@@ -832,22 +870,35 @@ export default function AdminDashboard() {
     setError("");
     setSuccess("");
 
-    const profileId = firstValue(request.profile_id, request.user_id, request.id);
+    let profileId = firstValue(request.profile_id, request.user_id);
     const rawStudentLoginId = firstValue(request.student_id, request.student_login_id);
-    const studentLoginId = normalizeStudentId(rawStudentLoginId);
+    const studentLoginId = normalizeStudentId(rawStudentLoginId) || generateStudentLoginId();
     const studentName = firstValue(request.full_name, request.name, request.email, "Student");
     const studentEmail = (request.email || "").trim();
     const authEmail = firstValue(request.auth_email, studentAuthEmailFor(studentLoginId));
     const nextPassword = generateStudentPassword();
 
-    if (!profileId || !studentLoginId || !studentEmail) {
+    if (!studentEmail) {
       setSaving(false);
-      setError("Missing student details for approval. Ensure request has student ID and email.");
+      setError("Student email is missing from this request.");
       return;
     }
 
     if (hasServiceRoleKey) {
-      const authResult = await serviceRoleAuthRequest(`/users/${profileId}`, "PUT", {
+      const listResult = await serviceRoleAuthRequest("/users?page=1&per_page=1000", "GET");
+      if (listResult.error) {
+        setSaving(false);
+        setError(getDbErrorMessage(listResult.error, "Unable to look up the student login account."));
+        return;
+      }
+
+      const existingUser = (listResult.data?.users || []).find((user) =>
+        user.id === profileId ||
+        (user.email || "").toLowerCase() === authEmail.toLowerCase() ||
+        (user.email || "").toLowerCase() === studentEmail.toLowerCase() ||
+        (user.user_metadata?.registered_email || "").toLowerCase() === studentEmail.toLowerCase()
+      );
+      const authPayload = {
         email: authEmail,
         password: nextPassword,
         email_confirm: true,
@@ -858,13 +909,24 @@ export default function AdminDashboard() {
           role: "student",
           status: "active",
         },
-      });
+      };
+      const authResult = existingUser?.id
+        ? await serviceRoleAuthRequest(`/users/${existingUser.id}`, "PUT", authPayload)
+        : await serviceRoleAuthRequest("/users", "POST", authPayload);
 
       if (authResult.error) {
         setSaving(false);
         setError(getDbErrorMessage(authResult.error, "Unable to prepare student login account."));
         return;
       }
+
+      profileId = authResult.data?.user?.id || authResult.data?.id || existingUser?.id || profileId;
+    }
+
+    if (!profileId) {
+      setSaving(false);
+      setError("Unable to create the student login account. Configure the Supabase service role key and try again.");
+      return;
     }
 
     let profileSyncWarning = false;
@@ -1003,7 +1065,7 @@ export default function AdminDashboard() {
 
     const nextPassword = trainerPassword.trim() || generateTrainerPassword();
     const nextPasswordValue = nextPassword.trim();
-    const nextTrainerLoginId = generateTrainerLoginId(8);
+    const nextTrainerReferenceId = generateTrainerReferenceId();
 
     try {
       const nextTrainerEmail = trainerEmail.trim() || `trainer-${Date.now()}@trainer.local`;
@@ -1012,6 +1074,7 @@ export default function AdminDashboard() {
         password: nextPasswordValue,
         fullName: trainerName.trim(),
         status: trainerStatus,
+        trainerReferenceId: nextTrainerReferenceId,
       });
 
       if (authResult.error) {
@@ -1098,7 +1161,8 @@ export default function AdminDashboard() {
         email: nextTrainerEmail,
         name: trainerName.trim(),
         password: nextPasswordValue,
-        trainerId: nextTrainerLoginId,
+        trainerId: nextTrainerReferenceId,
+        loginUrl: `${window.location.origin}/trainer-login`,
       });
 
       if (emailResult?.error) {
@@ -1441,131 +1505,51 @@ export default function AdminDashboard() {
       return;
     }
 
-    const existingEnrollment = enrollmentByProfile.get(String(mapStudentId));
-
-    const mappingPayload = {
-      profile_id: mapStudentId,
-      user_id: mapStudentId,
+    const existingEnrollment = enrollmentRows.find(
+      (enrollment) => String(enrollment.student_id) === String(mapStudentId)
+    );
+    const enrollmentPayload = {
       student_id: mapStudentId,
-      trainer_id: mapTrainerId,
       course_id: mapCourseId,
-      status: "active",
+      enrollment_status: "active",
     };
 
-    let mappingResult;
-    const saveEnrollment = async () => {
-      if (existingEnrollment?.id) {
-        return upsertWithServiceFallback("enrollments", { ...mappingPayload, id: existingEnrollment.id }, "id");
-      }
-      return insertWithServiceFallback("enrollments", mappingPayload);
-    };
+    // The live enrollments table has only student_id, course_id, and
+    // enrollment_status. Trainer ownership belongs to the selected course.
+    const enrollmentResult = existingEnrollment?.id
+      ? await upsertWithServiceFallback("enrollments", { ...enrollmentPayload, id: existingEnrollment.id }, "id")
+      : await insertWithServiceFallback("enrollments", enrollmentPayload);
 
-    const saveStudents = async () => upsertWithServiceFallback("students", mappingPayload, "id");
-
-    const saveStudentCourses = async () => insertWithServiceFallback("student_courses", {
-      student_id: mapStudentId,
-      profile_id: mapStudentId,
-      course_id: mapCourseId,
-      trainer_id: mapTrainerId,
-      status: "active",
-    });
-
-    mappingResult = await saveEnrollment();
-
-    if (mappingResult.error) {
-      const isMissingEnrollment = missingTable(mappingResult.error) || missingColumn(mappingResult.error);
-      if (!isMissingEnrollment) {
-        setSaving(false);
-        setError(getDbErrorMessage(mappingResult.error, "Unable to map student."));
-        console.error("Mapping error result:", mappingResult);
-        return;
-      }
-    }
-
-    if (mappingResult.skipped || !mappingResult.data) {
-      mappingResult = await saveStudents();
-
-      if (mappingResult.error) {
-        const isMissingStudentTable = missingTable(mappingResult.error) || missingColumn(mappingResult.error);
-        if (!isMissingStudentTable) {
-          setSaving(false);
-          setError(getDbErrorMessage(mappingResult.error, "Unable to map student."));
-          console.error("Mapping error result:", mappingResult);
-          return;
-        }
-      }
-    }
-
-    if (mappingResult.skipped || !mappingResult.data) {
-      mappingResult = await saveStudentCourses();
-
-      if (mappingResult.error) {
-        const isMissingCourseTable = missingTable(mappingResult.error) || missingColumn(mappingResult.error);
-        if (!isMissingCourseTable) {
-          setSaving(false);
-          setError(getDbErrorMessage(mappingResult.error, "Unable to map student."));
-          console.error("Mapping error result:", mappingResult);
-          return;
-        }
-      }
-    }
-
-    if (mappingResult.skipped || !mappingResult.data) {
+    if (enrollmentResult.error || enrollmentResult.skipped || !enrollmentResult.data) {
       setSaving(false);
-      setError("Unable to save mapping. Please create an enrollments, students, or student_courses table.");
+      setError(getDbErrorMessage(enrollmentResult.error, "Unable to enroll the student in this course."));
       return;
     }
 
-    if (mappingResult.error) {
+    let courseResult = await safeUpdate("courses", mapCourseId, { trainer_id: mapTrainerId });
+    if (courseResult.error && hasServiceRoleKey) {
+      const serviceResult = await serviceRoleTableRequest(
+        "courses",
+        `?id=eq.${encodeURIComponent(mapCourseId)}&select=*`,
+        "PATCH",
+        { trainer_id: mapTrainerId }
+      );
+      courseResult = serviceResult.error
+        ? { error: serviceResult.error }
+        : { data: Array.isArray(serviceResult.data) ? serviceResult.data[0] : serviceResult.data };
+    }
+
+    if (courseResult.error || !courseResult.data) {
       setSaving(false);
-      setError(getDbErrorMessage(mappingResult.error, "Unable to map student."));
-      console.error("Mapping error result:", mappingResult);
+      setError(getDbErrorMessage(courseResult.error, "Student enrolled, but the trainer could not be assigned to the course."));
       return;
     }
 
-    if (mappingResult.skipped) {
-      setSaving(false);
-      setError("Unable to save mapping. Please create an enrollments table or students/student_courses tables.");
-      return;
-    }
-
-    // Log mapping result for debugging and verify the saved mapping exists in either `enrollments` or `student_courses`.
-      // Log a concise mapping result to the console for diagnosis.
-      try {
-        const short = mappingResult.data ? (mappingResult.data.id || (Array.isArray(mappingResult.data) ? mappingResult.data[0]?.id : null)) : null;
-        console.debug("Mapping result summary:", { skipped: mappingResult.skipped, id: short, data: mappingResult.data });
-      } catch (logErr) {
-        console.debug("Mapping result (raw):", mappingResult);
-      }
-
-    try {
-      const returnedId = mappingResult?.data?.id ?? (Array.isArray(mappingResult?.data) ? mappingResult.data[0]?.id : null);
-      const foundInMappingTables = await verifyMapping(mapStudentId, returnedId);
-
-      setMapStudentId("");
-      setMapTrainerId("");
-      setMapCourseId("");
-      setSaving(false);
-
-      if (foundInMappingTables) {
-        setSuccess("Student mapping saved.");
-      } else {
-        const returnedId = mappingResult?.data?.id ?? (Array.isArray(mappingResult?.data) ? mappingResult.data[0]?.id : null);
-        setSuccess(
-          returnedId
-            ? `Student mapping saved (record id=${returnedId}), but no mapping row was detected. Check RLS or table naming.`
-            : "Student mapping saved, but no mapping row was detected. Check RLS or table naming (enrollments vs student_courses vs students)."
-        );
-      }
-    } catch (verifyErr) {
-      setMapStudentId("");
-      setMapTrainerId("");
-      setMapCourseId("");
-      setSaving(false);
-      setSuccess("Student mapping saved. Verification query failed — check console for details.");
-      console.error("Mapping verification error:", verifyErr);
-    }
-
+    setMapStudentId("");
+    setMapTrainerId("");
+    setMapCourseId("");
+    setSaving(false);
+    setSuccess("Student, course, and trainer mapping saved.");
     await loadData();
   };
 
@@ -1578,7 +1562,59 @@ export default function AdminDashboard() {
   ];
 
   const renderAnalytics = () => {
-    return null;
+    return (
+      <section className="space-y-6">
+        <div className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-cert-green-dark">Analytics</p>
+          <h2 className="mt-3 text-2xl font-semibold text-cert-ink">Course assignments</h2>
+          <p className="mt-2 text-sm text-slate-500">View every course with its trainer and enrolled students.</p>
+        </div>
+
+        <div className="grid gap-5 lg:grid-cols-2">
+          {courseAssignments.length === 0 && (
+            <p className="rounded-[1.75rem] border border-cert-line bg-white px-5 py-4 text-sm text-slate-500">No courses have been created yet.</p>
+          )}
+          {courseAssignments.map((course) => (
+            <article key={course.id} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cert-green-dark">Course</p>
+                  <h3 className="mt-2 text-xl font-semibold text-cert-ink">{course.course_name}</h3>
+                </div>
+                <span className="rounded-full bg-cert-mint px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-cert-green-dark">
+                  {course.status || "active"}
+                </span>
+              </div>
+
+              <div className="mt-5 rounded-2xl bg-cert-mint px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Trainer</p>
+                <p className="mt-1 font-semibold text-cert-ink">{course.trainer_name}</p>
+              </div>
+
+              <div className="mt-5">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-cert-ink">Assigned students</p>
+                  <span className="rounded-full bg-cert-green/15 px-3 py-1 text-sm font-semibold text-cert-green-dark">
+                    {course.assigned_students.length}
+                  </span>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {course.assigned_students.length === 0 ? (
+                    <p className="text-sm text-slate-500">No students assigned.</p>
+                  ) : (
+                    course.assigned_students.map((student) => (
+                      <span key={student.id} className="rounded-full border border-cert-line bg-white px-3 py-2 text-sm text-cert-ink">
+                        {firstValue(student.full_name, student.name, student.email, "Student")}
+                      </span>
+                    ))
+                  )}
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
   };
 
   if (loading) {
