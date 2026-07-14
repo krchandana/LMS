@@ -14,6 +14,13 @@ const formatAssignmentDate = (date) => {
   const parsed = new Date(`${date.slice(0, 10)}T00:00:00`);
   return Number.isNaN(parsed.getTime()) ? date : new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" }).format(parsed);
 };
+const formatAssignedDate = (date) => {
+  if (!date) return "Date unavailable";
+  const parsed = new Date(date);
+  return Number.isNaN(parsed.getTime())
+    ? "Date unavailable"
+    : new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" }).format(parsed);
+};
 
 const fetchRows = async (table, buildQuery) => {
   try {
@@ -59,9 +66,10 @@ export default function TrainerDashboard() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [assignmentForm, setAssignmentForm] = useState({ courseId: "", title: "", description: "", dueDate: "" });
-  const [projectForm, setProjectForm] = useState({ courseId: "", studentId: "", title: "", description: "" });
+  const [projectForm, setProjectForm] = useState({ courseId: "", title: "", description: "" });
   const [reviewNotes, setReviewNotes] = useState({});
-  const [activeWorkspace, setActiveWorkspace] = useState("create-assignment");
+  // Make new student work the first thing a trainer sees after signing in.
+  const [activeWorkspace, setActiveWorkspace] = useState("assignment-submissions");
 
   const loadDashboard = async () => {
     if (!profile?.id) return;
@@ -138,11 +146,26 @@ export default function TrainerDashboard() {
       });
     return [...groups.entries()];
   }, [assignments]);
+  const assignedProjectGroups = useMemo(() => {
+    const groups = new Map();
 
-  const courseStudents = (courseId) => {
-    const ids = new Set(enrollments.filter((row) => String(row.course_id) === String(courseId)).map((row) => String(row.student_id)));
-    return students.filter((student) => ids.has(String(student.id)));
-  };
+    projects.forEach((project) => {
+      const assignedAt = project.created_at || project.assigned_at || null;
+      const key = `${project.course_id || "course"}-${project.title || "project"}-${assignedAt || project.id}`;
+      const group = groups.get(key) || { ...project, assignedAt, studentIds: new Set() };
+      if (project.student_id) group.studentIds.add(String(project.student_id));
+      groups.set(key, group);
+    });
+
+    return [...groups.values()].sort((first, second) => String(second.assignedAt || "").localeCompare(String(first.assignedAt || "")));
+  }, [projects]);
+
+  const enrolledStudentIds = (courseId) => [...new Set(
+    enrollments
+      .filter((row) => String(row.course_id) === String(courseId))
+      .map((row) => row.student_id)
+      .filter(Boolean)
+  )];
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -184,23 +207,28 @@ export default function TrainerDashboard() {
     event.preventDefault();
     setError("");
     setMessage("");
-    if (!projectForm.courseId || !projectForm.studentId || !projectForm.title.trim()) {
-      setError("Select a course, student, and project title.");
+    if (!projectForm.courseId || !projectForm.title.trim()) {
+      setError("Select a course and enter a project title.");
       return;
     }
-    const { error: createError } = await supabase.from("projects").insert({
+    const studentIds = enrolledStudentIds(projectForm.courseId);
+    if (!studentIds.length) {
+      setError("This course has no enrolled students to assign the project to.");
+      return;
+    }
+    const { error: createError } = await supabase.from("projects").insert(studentIds.map((studentId) => ({
       course_id: projectForm.courseId,
-      student_id: projectForm.studentId,
+      student_id: studentId,
       title: projectForm.title.trim(),
       description: projectForm.description.trim() || null,
       status: "pending",
-    });
+    })));
     if (createError) {
       setError(createError.message || "Unable to assign project.");
       return;
     }
-    setProjectForm({ courseId: "", studentId: "", title: "", description: "" });
-    setMessage("Project assigned to the selected student.");
+    setProjectForm({ courseId: "", title: "", description: "" });
+    setMessage(`Project assigned to ${studentIds.length} enrolled ${studentIds.length === 1 ? "student" : "students"}.`);
     await loadDashboard();
   };
 
@@ -302,7 +330,7 @@ export default function TrainerDashboard() {
             <div className="grid grid-cols-3 gap-3 text-center">
               <div className="rounded-2xl bg-cert-mint px-4 py-3"><UsersRound size={18} className="mx-auto text-cert-green-dark" /><p className="mt-2 text-lg font-semibold">{students.length}</p><p className="text-xs text-slate-500">Students</p></div>
               <div className="rounded-2xl bg-cert-mint px-4 py-3"><BookOpenCheck size={18} className="mx-auto text-cert-green-dark" /><p className="mt-2 text-lg font-semibold">{assignments.length}</p><p className="text-xs text-slate-500">Assignments</p></div>
-              <div className="rounded-2xl bg-cert-mint px-4 py-3"><ClipboardCheck size={18} className="mx-auto text-cert-green-dark" /><p className="mt-2 text-lg font-semibold">{awaitingSubmissions.length + awaitingProjects.length}</p><p className="text-xs text-slate-500">To review</p></div>
+              <button type="button" onClick={() => openWorkspace("assignment-submissions")} className="rounded-2xl bg-cert-mint px-4 py-3 transition hover:bg-cert-green/20"><ClipboardCheck size={18} className="mx-auto text-cert-green-dark" /><p className="mt-2 text-lg font-semibold">{awaitingSubmissions.length + awaitingProjects.length}</p><p className="text-xs text-slate-500">To review</p></button>
             </div>
           </div>
         </section>
@@ -310,7 +338,7 @@ export default function TrainerDashboard() {
         {(error || message) && <p className={`rounded-2xl px-4 py-3 text-sm ${error ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>{error || message}</p>}
 
         {(activeWorkspace === "create-assignment" || activeWorkspace === "assign-project") && (
-          <section className={`mx-auto grid w-full gap-5 ${activeWorkspace === "create-assignment" ? "max-w-7xl xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" : "max-w-3xl"}`}>
+          <section className="mx-auto grid w-full max-w-7xl gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           {activeWorkspace === "create-assignment" && <form id="create-assignment" onSubmit={createAssignment} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
             <h2 className="inline-flex items-center gap-2 text-xl font-semibold text-cert-ink"><Plus size={20} /> Create assignment</h2>
             <div className="mt-5 grid gap-3">
@@ -350,13 +378,40 @@ export default function TrainerDashboard() {
           {activeWorkspace === "assign-project" && <form id="assign-project" onSubmit={createProject} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
             <h2 className="inline-flex items-center gap-2 text-xl font-semibold text-cert-ink"><Plus size={20} /> Assign project</h2>
             <div className="mt-5 grid gap-3">
-              <select value={projectForm.courseId} onChange={(e) => setProjectForm({ ...projectForm, courseId: e.target.value, studentId: "" })} className="rounded-xl border border-cert-line bg-cert-mint px-4 py-3" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select>
-              <select value={projectForm.studentId} onChange={(e) => setProjectForm({ ...projectForm, studentId: e.target.value })} className="rounded-xl border border-cert-line bg-cert-mint px-4 py-3" required><option value="">Select enrolled student</option>{courseStudents(projectForm.courseId).map((student) => <option key={student.id} value={student.id}>{titleFor(student, "Student")}</option>)}</select>
+              <select value={projectForm.courseId} onChange={(e) => setProjectForm({ ...projectForm, courseId: e.target.value })} className="rounded-xl border border-cert-line bg-cert-mint px-4 py-3" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select>
+              <p className="rounded-xl bg-cert-mint px-4 py-3 text-sm text-slate-600">
+                {projectForm.courseId
+                  ? `This project will be assigned to all ${enrolledStudentIds(projectForm.courseId).length} students enrolled in this course.`
+                  : "Select a course to assign the project to every enrolled student."}
+              </p>
               <input value={projectForm.title} onChange={(e) => setProjectForm({ ...projectForm, title: e.target.value })} placeholder="Project title" className="rounded-xl border border-cert-line px-4 py-3" required />
               <textarea value={projectForm.description} onChange={(e) => setProjectForm({ ...projectForm, description: e.target.value })} placeholder="Project instructions" className="min-h-24 rounded-xl border border-cert-line px-4 py-3" />
-              <button className="rounded-xl bg-cert-green px-4 py-3 font-semibold text-cert-ink">Assign project</button>
+              <button className="rounded-xl bg-cert-green px-4 py-3 font-semibold text-cert-ink">Assign project to all students</button>
             </div>
           </form>}
+
+          {activeWorkspace === "assign-project" && <aside className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-semibold text-cert-ink">Assigned projects</h2>
+                <p className="mt-1 text-sm text-slate-500">Projects sent to enrolled students, newest first.</p>
+              </div>
+              <span className="rounded-full bg-cert-mint px-3 py-1 text-sm font-semibold text-cert-green-dark">{assignedProjectGroups.length} total</span>
+            </div>
+            <div className="mt-5 max-h-[34rem] space-y-3 overflow-y-auto pr-1">
+              {assignedProjectGroups.length === 0 ? <p className="rounded-2xl bg-cert-mint p-4 text-sm text-slate-500">No projects have been assigned yet.</p> : assignedProjectGroups.map((project) => <article key={`${project.id}-${project.assignedAt || "undated"}`} className="rounded-2xl border border-cert-line bg-cert-mint/70 p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="font-semibold text-cert-ink">{titleFor(project, "Project")}</p>
+                    <p className="mt-1 text-sm text-slate-600">Course: {titleFor(courseById.get(String(project.course_id)), "Course")}</p>
+                  </div>
+                  <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-cert-green-dark">{formatAssignedDate(project.assignedAt)}</span>
+                </div>
+                {project.description && <p className="mt-3 text-sm leading-6 text-slate-600">{project.description}</p>}
+                <p className="mt-3 text-sm font-medium text-cert-ink">Assigned to {project.studentIds.size} {project.studentIds.size === 1 ? "student" : "students"}</p>
+              </article>)}
+            </div>
+          </aside>}
           </section>
         )}
 

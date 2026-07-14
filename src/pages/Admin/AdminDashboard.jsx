@@ -485,7 +485,8 @@ export default function AdminDashboard() {
   const [courseDuration, setCourseDuration] = useState("");
   const [courseStatus, setCourseStatus] = useState("active");
 
-  const [mapStudentId, setMapStudentId] = useState("");
+  const [mapStudentIds, setMapStudentIds] = useState([]);
+  const [showStudentPicker, setShowStudentPicker] = useState(false);
   const [mapTrainerId, setMapTrainerId] = useState("");
   const [mapCourseId, setMapCourseId] = useState("");
   const [editingStudent, setEditingStudent] = useState(null);
@@ -748,16 +749,32 @@ export default function AdminDashboard() {
     return map;
   }, [studentRecords, studentCourseRows, enrollmentRows]);
 
-  const trainerWorkloadById = useMemo(() => {
+  const trainerAssignmentsById = useMemo(() => {
     const map = new Map();
-    studentRecords.forEach((record) => {
-      if (record.trainer_id) map.set(String(record.trainer_id), (map.get(String(record.trainer_id)) || 0) + 1);
+    const ensureTrainer = (trainerId) => {
+      const key = String(trainerId);
+      if (!map.has(key)) map.set(key, { courses: [], studentIds: new Set() });
+      return map.get(key);
+    };
+    const courseByTrainer = new Map();
+
+    courses.forEach((course) => {
+      if (!course.trainer_id || !course.id) return;
+      const trainerAssignment = ensureTrainer(course.trainer_id);
+      trainerAssignment.courses.push(course);
+      courseByTrainer.set(String(course.id), String(course.trainer_id));
     });
-    enrollmentRows.forEach((record) => {
-      if (record.trainer_id) map.set(String(record.trainer_id), (map.get(String(record.trainer_id)) || 0) + 1);
+
+    [studentRecords, studentCourseRows, enrollmentRows].forEach((records) => {
+      records.forEach((record) => {
+        const trainerId = record.trainer_id || courseByTrainer.get(String(record.course_id));
+        const studentId = record.student_id || record.profile_id || record.user_id || record.id;
+        if (trainerId && studentId) ensureTrainer(trainerId).studentIds.add(String(studentId));
+      });
     });
+
     return map;
-  }, [studentRecords, enrollmentRows]);
+  }, [courses, studentRecords, studentCourseRows, enrollmentRows]);
 
   const enrichedStudents = useMemo(
     () =>
@@ -1506,40 +1523,23 @@ export default function AdminDashboard() {
     setError("");
     setSuccess("");
 
-    if (!mapStudentId || !mapTrainerId || !mapCourseId) {
+    if (!mapStudentIds.length || !mapTrainerId || !mapCourseId) {
       setSaving(false);
-      setError("Please select student, trainer, and course.");
+      setError("Please select at least one student, a trainer, and a course.");
       return;
     }
 
-    const existingEnrollment = enrollmentRows.find(
-      (enrollment) => String(enrollment.student_id) === String(mapStudentId)
-    );
-    const enrollmentPayload = {
-      student_id: mapStudentId,
-      course_id: mapCourseId,
-      enrollment_status: "active",
-    };
-
-    // The live enrollments table has only student_id, course_id, and
-    // enrollment_status. Trainer ownership belongs to the selected course.
-    const enrollmentResult = existingEnrollment?.id
-      ? await upsertWithServiceFallback("enrollments", { ...enrollmentPayload, id: existingEnrollment.id }, "id")
-      : await insertWithServiceFallback("enrollments", enrollmentPayload);
-
-    if (enrollmentResult.error || enrollmentResult.skipped || !enrollmentResult.data) {
-      setSaving(false);
-      setError(getDbErrorMessage(enrollmentResult.error, "Unable to enroll the student in this course."));
-      return;
-    }
-
-    let courseResult = await safeUpdate("courses", mapCourseId, { trainer_id: mapTrainerId });
+    const selectedTrainerName = trainerNameById.get(String(mapTrainerId)) || null;
+    let courseResult = await safeUpdate("courses", mapCourseId, {
+      trainer_id: mapTrainerId,
+      trainer_name: selectedTrainerName,
+    });
     if (courseResult.error && hasServiceRoleKey) {
       const serviceResult = await serviceRoleTableRequest(
         "courses",
         `?id=eq.${encodeURIComponent(mapCourseId)}&select=*`,
         "PATCH",
-        { trainer_id: mapTrainerId }
+        { trainer_id: mapTrainerId, trainer_name: selectedTrainerName }
       );
       courseResult = serviceResult.error
         ? { error: serviceResult.error }
@@ -1552,11 +1552,36 @@ export default function AdminDashboard() {
       return;
     }
 
-    setMapStudentId("");
+    // A course has one trainer, while several students can be enrolled in it.
+    // Save each selected student after the course trainer is confirmed.
+    const failedStudentIds = [];
+    for (const studentId of mapStudentIds) {
+      const existingEnrollment = enrollmentRows.find(
+        (enrollment) => String(enrollment.student_id) === String(studentId)
+      );
+      const enrollmentPayload = {
+        student_id: studentId,
+        course_id: mapCourseId,
+        enrollment_status: "active",
+      };
+      const enrollmentResult = existingEnrollment?.id
+        ? await upsertWithServiceFallback("enrollments", { ...enrollmentPayload, id: existingEnrollment.id }, "id")
+        : await insertWithServiceFallback("enrollments", enrollmentPayload);
+
+      if (enrollmentResult.error || enrollmentResult.skipped || !enrollmentResult.data) failedStudentIds.push(studentId);
+    }
+
+    const mappedStudentCount = mapStudentIds.length - failedStudentIds.length;
+    setMapStudentIds([]);
+    setShowStudentPicker(false);
     setMapTrainerId("");
     setMapCourseId("");
     setSaving(false);
-    setSuccess("Student, course, and trainer mapping saved.");
+    if (failedStudentIds.length) {
+      setError(`${mappedStudentCount} student${mappedStudentCount === 1 ? "" : "s"} mapped, but ${failedStudentIds.length} could not be enrolled. Please try those students again.`);
+    } else {
+      setSuccess(`${mappedStudentCount} student${mappedStudentCount === 1 ? "" : "s"}, course, and trainer mapping saved.`);
+    }
     await loadData();
   };
 
@@ -1571,12 +1596,6 @@ export default function AdminDashboard() {
   const renderAnalytics = () => {
     return (
       <section className="space-y-6">
-        <div className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-          <p className="text-xs font-semibold uppercase tracking-[0.28em] text-cert-green-dark">Analytics</p>
-          <h2 className="mt-3 text-2xl font-semibold text-cert-ink">Course assignments</h2>
-          <p className="mt-2 text-sm text-slate-500">View every course with its trainer and enrolled students.</p>
-        </div>
-
         <div className="grid gap-5 lg:grid-cols-2">
           {courseAssignments.length === 0 && (
             <p className="rounded-[1.75rem] border border-cert-line bg-white px-5 py-4 text-sm text-slate-500">No courses have been created yet.</p>
@@ -1689,55 +1708,44 @@ export default function AdminDashboard() {
           </div>
         </section>
 
-        <section className="cert-glass-panel overflow-hidden rounded-[2.5rem] shadow-[0_28px_85px_-48px_rgba(7,26,47,0.38)]">
+        {activeTab === "overview" && <section className="cert-glass-panel overflow-hidden rounded-[2.5rem] shadow-[0_28px_85px_-48px_rgba(7,26,47,0.38)]">
           <div className="grid lg:grid-cols-[1.15fr_0.85fr]">
             <div className="relative overflow-hidden bg-[linear-gradient(180deg,#061e33_0%,#06324f_56%,#10945a_100%)] p-6 text-white sm:p-8 lg:p-10">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(231,232,91,0.18),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(49,201,111,0.2),transparent_36%)]" />
-              <div className="relative flex h-full flex-col justify-between gap-8">
-                <div>
-                  <div className="inline-flex items-center gap-2 rounded-full bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-cert-yellow ring-1 ring-white/10 backdrop-blur">
-                    <Bell size={14} aria-hidden="true" />
-                    Admin control center
-                  </div>
-                  <p className="mt-4 max-w-2xl text-sm leading-7 text-emerald-50/85 sm:text-base">
-                    Approve student access, manage trainers and courses, map assignments, and monitor platform performance from one polished workspace.
-                  </p>
+              <div className="relative flex h-full min-h-[22rem] flex-col justify-between gap-5">
+                <div className="inline-flex w-fit items-center gap-3 rounded-2xl bg-white px-4 py-3 shadow-[0_16px_36px_-24px_rgba(0,0,0,0.75)]">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-cert-ink text-cert-green">
+                    <ShieldCheck size={28} strokeWidth={2.75} aria-hidden="true" />
+                  </span>
+                  <span className="text-2xl font-black tracking-tight text-cert-ink sm:text-3xl">CERTISURED</span>
                 </div>
-
+                <img
+                  src="/images/certisured-growth.png"
+                  alt="A learner climbing toward achievement on growing course progress bars"
+                  className="mx-auto w-full max-w-[36rem] object-contain object-bottom"
+                />
               </div>
             </div>
 
-            <div className="flex flex-col justify-between gap-4 bg-[radial-gradient(circle_at_90%_0%,rgba(231,232,91,0.14),transparent_32%),linear-gradient(180deg,#f8fcf8_0%,#eef9f1_100%)] p-6 sm:p-8 lg:p-10">
-              <div className="rounded-[1.8rem] border border-cert-line bg-white p-5 shadow-[0_22px_50px_-38px_rgba(7,26,47,0.18)]">
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cert-green-dark">Workspace focus</p>
-                <p className="mt-3 text-2xl font-semibold text-cert-ink">Approvals, mapping, and analytics</p>
-                <p className="mt-3 text-sm leading-6 text-slate-600">
-                  Use the quick tabs to move between requests, trainers, students, courses, and reporting without losing context.
-                </p>
+            <div className="min-h-[16rem] bg-[radial-gradient(circle_at_90%_0%,rgba(231,232,91,0.14),transparent_32%),linear-gradient(180deg,#f8fcf8_0%,#eef9f1_100%)] p-4 sm:p-6 lg:p-8">
+              <div className="grid h-full grid-cols-2 gap-3">
+                {statCards.map((card) => (
+                  <article key={card.label} className="relative overflow-hidden rounded-2xl border border-cert-line bg-white p-4 shadow-[0_20px_48px_-36px_rgba(7,26,47,0.22)] sm:p-5">
+                    <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#06324f_0%,#31c96f_55%,#e7e85b_100%)]" />
+                    <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-slate-500 sm:text-xs">{card.label}</p>
+                    <p className="mt-2 text-3xl font-semibold text-cert-ink sm:text-4xl">{card.value}</p>
+                    <p className="mt-2 text-xs leading-5 text-slate-500 sm:text-sm">{card.hint}</p>
+                  </article>
+                ))}
               </div>
-
-
             </div>
           </div>
-        </section>
+        </section>}
 
         {(error || success) && (
           <section className="space-y-3">
             {error && <p className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
             {success && <p className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</p>}
-          </section>
-        )}
-
-        {activeTab === "overview" && (
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {statCards.map((card) => (
-              <article key={card.label} className="relative overflow-hidden rounded-[1.5rem] border border-cert-line bg-white p-5 shadow-[0_20px_48px_-36px_rgba(7,26,47,0.22)]">
-                <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#06324f_0%,#31c96f_55%,#e7e85b_100%)]" />
-                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">{card.label}</p>
-                <p className="mt-3 text-4xl font-semibold text-cert-ink">{card.value}</p>
-                <p className="mt-2 text-sm text-slate-500">{card.hint}</p>
-              </article>
-            ))}
           </section>
         )}
 
@@ -1782,96 +1790,70 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "trainers" && (
-          <section className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-            <div className="rounded-[1.75rem] border border-cert-line bg-white p-6">
-              <h2 className="text-2xl font-semibold text-cert-ink">Trainer List</h2>
-              <p className="mt-2 text-sm text-slate-500">Add, view, update, and manage trainer profiles.</p>
-              <div className="mt-6 space-y-3">
+          <section className="mx-auto grid w-full max-w-7xl gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
+              <div className="space-y-3">
                 {trainers.length === 0 && <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">No trainers found.</p>}
-                {trainers.map((trainer) => (
-                  <div key={trainer.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <p className="font-semibold text-slate-900">{firstValue(trainer.full_name, trainer.name, trainer.email, "Unnamed trainer")}</p>
-                        {trainer.email && <p className="mt-1 text-sm text-slate-600">{trainer.email}</p>}
-                        <p className="mt-1 text-sm text-slate-600">Students assigned: {trainerWorkloadById.get(String(trainer.id)) || 0}</p>
+                {trainers.map((trainer) => {
+                  const assignment = trainerAssignmentsById.get(String(trainer.id));
+                  const assignedCourses = assignment?.courses || [];
+                  const assignedStudentCount = assignment?.studentIds.size || 0;
+
+                  return (
+                  <article key={trainer.id} className="overflow-hidden rounded-2xl border border-cert-line bg-slate-50 shadow-[0_16px_35px_-30px_rgba(7,26,47,0.38)]">
+                    <div className="grid md:grid-cols-[12rem_minmax(0,1fr)]">
+                      <div className="relative flex min-h-44 overflow-hidden bg-[radial-gradient(circle_at_82%_78%,rgba(49,201,111,0.55),transparent_24%),linear-gradient(145deg,#061e33_0%,#082d48_65%,#0b7650_100%)] p-5 text-white">
+                        <div className="inline-flex h-fit items-center gap-2 rounded-xl bg-white px-2.5 py-2 shadow-[0_10px_24px_-16px_rgba(0,0,0,0.9)]">
+                          <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-cert-ink text-cert-green"><ShieldCheck size={18} strokeWidth={2.8} aria-hidden="true" /></span>
+                          <span className="text-xs font-black tracking-tight text-cert-ink">CERTISURED</span>
+                        </div>
+                        <div className="absolute bottom-5 left-5 right-5">
+                          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cert-green">Trainer profile</p>
+                          <p className="mt-2 truncate text-xl font-semibold">{firstValue(trainer.full_name, trainer.name, trainer.email, "Trainer")}</p>
+                        </div>
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          disabled={saving}
-                          onClick={() => toggleTrainerStatus(trainer)}
-                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-70"
-                        >
-                          {(trainer.status || "active").toLowerCase() === "active" ? "Set Inactive" : "Set Active"}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={saving}
-                          onClick={() => removeTrainer(trainer)}
-                          className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-70"
-                        >
-                          Remove
-                        </button>
+                      <div className="flex min-w-0 flex-col p-5 sm:p-6">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <h3 className="text-2xl font-semibold text-cert-ink">{firstValue(trainer.full_name, trainer.name, trainer.email, "Unnamed trainer")}</h3>
+                            <p className="mt-2 text-sm text-slate-600">{trainer.email || "Email unavailable"}</p>
+                          </div>
+                          <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${(trainer.status || "active").toLowerCase() === "active" ? "bg-cert-green/15 text-cert-green-dark" : "bg-slate-200 text-slate-600"}`}>{trainer.status || "active"}</span>
+                        </div>
+                        <div className="mt-5 border-t border-cert-line pt-4">
+                          <p className="text-sm font-medium text-slate-600">Assigned courses: <span className="font-semibold text-cert-ink">{assignedCourses.length}</span></p>
+                          {assignedCourses.length > 0 ? <div className="mt-3 flex flex-wrap gap-2">{assignedCourses.map((course) => <span key={course.id} className="rounded-full bg-cert-green/15 px-3 py-1 text-xs font-semibold text-cert-green-dark">{firstValue(course.title, course.name, course.course_name, "Course")}</span>)}</div> : <p className="mt-2 text-sm text-slate-500">No courses assigned yet.</p>}
+                        </div>
+                        <p className="mt-5 inline-flex items-center gap-2 border-t border-cert-line pt-4 text-sm font-medium text-slate-600"><UsersRound size={17} className="text-cert-green-dark" aria-hidden="true" /> {assignedStudentCount} students assigned</p>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  </article>
+                  );
+                })}
               </div>
-            </div>
-
-            <form onSubmit={createTrainer} className="rounded-[1.75rem] border border-cert-line bg-white p-6">
-              <h3 className="text-xl font-semibold text-cert-ink">Add Trainer</h3>
-              <p className="mt-2 text-sm text-slate-500">Create a trainer profile for assignment workflows.</p>
+            <form onSubmit={createTrainer} className="h-fit rounded-[1.75rem] border border-cert-line bg-white p-6 xl:sticky xl:top-28">
+              <h2 className="text-xl font-semibold text-cert-ink">Add Trainer</h2>
+              <p className="mt-2 text-sm text-slate-500">Create a trainer profile for course assignments.</p>
               <div className="mt-5 space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Full name</label>
-                  <input
-                    value={trainerName}
-                    onChange={(event) => setTrainerName(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
-                    placeholder="Trainer name"
-                    required
-                  />
+                  <input value={trainerName} onChange={(event) => setTrainerName(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" placeholder="Trainer name" required />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700">Email (optional)</label>
-                  <input
-                    value={trainerEmail}
-                    onChange={(event) => setTrainerEmail(event.target.value)}
-                    type="email"
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
-                    placeholder="trainer@example.com"
-                  />
+                  <label className="block text-sm font-medium text-slate-700">Email</label>
+                  <input value={trainerEmail} onChange={(event) => setTrainerEmail(event.target.value)} type="email" className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" placeholder="trainer@example.com" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Temporary password</label>
-                  <input
-                    value={trainerPassword}
-                    onChange={(event) => setTrainerPassword(event.target.value)}
-                    type="text"
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
-                    placeholder="Seven-word password"
-                  />
-                  <p className="mt-2 text-xs text-slate-500">A seven-word password is generated automatically and sent to the trainer email.</p>
+                  <input value={trainerPassword} onChange={(event) => setTrainerPassword(event.target.value)} type="text" className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" placeholder="Seven-word password" />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Status</label>
-                  <select
-                    value={trainerStatus}
-                    onChange={(event) => setTrainerStatus(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
-                  >
+                  <select value={trainerStatus} onChange={(event) => setTrainerStatus(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15">
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
                   </select>
                 </div>
-                
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="w-full rounded-xl bg-cert-navy px-4 py-3 text-sm font-semibold text-white hover:bg-cert-ink disabled:opacity-70"
-                >
+                <button type="submit" disabled={saving} className="w-full rounded-xl bg-cert-navy px-4 py-3 text-sm font-semibold text-white transition hover:bg-cert-ink disabled:opacity-70">
                   {saving ? "Saving..." : "Add trainer"}
                 </button>
               </div>
@@ -1929,36 +1911,55 @@ export default function AdminDashboard() {
                 </div>
               </form>
             )}
-            <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="mt-6 grid gap-5 md:grid-cols-2">
               {enrichedStudents.length === 0 && <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">No students found.</p>}
               {enrichedStudents.map((student) => (
-                <article key={student.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-slate-900">{firstValue(student.full_name, student.name, student.email, "Student")}</p>
-                      <p className="mt-1 text-sm text-slate-600">Student ID: {student.student_id || "N/A"}</p>
+                <article key={student.id} className="relative overflow-hidden rounded-[1.5rem] border border-cert-line bg-white p-5 shadow-[0_20px_46px_-34px_rgba(7,26,47,0.3)]">
+                  <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#06324f_0%,#31c96f_55%,#e7e85b_100%)]" />
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-cert-ink text-lg font-bold text-cert-green shadow-lg shadow-cert-ink/15">
+                        {firstValue(student.full_name, student.name, student.email, "S").charAt(0).toUpperCase()}
+                      </span>
+                      <div className="min-w-0">
+                        <h3 className="truncate text-lg font-semibold text-cert-ink">{firstValue(student.full_name, student.name, student.email, "Student")}</h3>
+                        <p className="mt-1 truncate text-xs text-slate-500">ID: {student.student_id || "Not assigned"}</p>
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <button
                         type="button"
                         onClick={() => startEditStudent(student)}
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-100"
+                        className="rounded-xl border border-cert-line bg-white px-3 py-2 text-sm font-semibold text-cert-ink transition hover:border-cert-green hover:bg-cert-mint"
                       >
                         Edit
                       </button>
                       <button
                         type="button"
                         onClick={() => removeStudent(student)}
-                        className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100"
+                        className="rounded-xl bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
                       >
                         Delete
                       </button>
                     </div>
                   </div>
-                  <p className="mt-3 text-sm text-slate-600">Status: {student.status || "N/A"}</p>
-                  <p className="mt-1 text-sm text-slate-600">Course: {student.enrolled_course}</p>
-                  <p className="mt-1 text-sm text-slate-600">Trainer: {student.trainer_name}</p>
-                  <p className="mt-1 text-sm text-slate-600">Progress: {student.progress || 0}%</p>
+                  <div className="mt-5 grid gap-3 border-y border-cert-line py-4 sm:grid-cols-2">
+                    <div className="rounded-xl bg-cert-mint p-3">
+                      <p className="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-slate-500">Course</p>
+                      <p className="mt-1 truncate text-sm font-semibold text-cert-ink">{student.enrolled_course}</p>
+                    </div>
+                    <div className="rounded-xl bg-cert-mint p-3">
+                      <p className="text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-slate-500">Trainer</p>
+                      <p className="mt-1 truncate text-sm font-semibold text-cert-ink">{student.trainer_name}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex items-center justify-between gap-4">
+                    <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${(student.status || "").toLowerCase() === "active" ? "bg-cert-green/15 text-cert-green-dark" : "bg-slate-100 text-slate-600"}`}>{student.status || "N/A"}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-3 text-xs font-semibold text-slate-500"><span>Progress</span><span className="text-cert-ink">{student.progress || 0}%</span></div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-[linear-gradient(90deg,#149b55,#31c96f)]" style={{ width: `${Math.min(100, Math.max(0, Number(student.progress) || 0))}%` }} /></div>
+                    </div>
+                  </div>
                 </article>
               ))}
             </div>
@@ -1966,96 +1967,73 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "courses" && (
-          <section className="grid gap-5 lg:grid-cols-[1.1fr_0.9fr]">
-            <div className="rounded-[1.75rem] border border-cert-line bg-white p-6">
-              <h2 className="text-2xl font-semibold text-cert-ink">Course Management</h2>
-              <p className="mt-2 text-sm text-slate-500">Create and manage course name, description, duration, and status.</p>
-              <div className="mt-6 space-y-3">
+          <section className="mx-auto grid w-full max-w-7xl gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
+              <div className="space-y-5">
                 {courses.length === 0 && <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">No courses available.</p>}
                 {courses.map((course) => (
-                  <div key={course.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <p className="font-semibold text-slate-900">{firstValue(course.title, course.name, course.course_name, "Untitled course")}</p>
-                        <p className="mt-1 text-sm text-slate-600">Description: {firstValue(course.description, course.course_description, "N/A")}</p>
-                        <p className="mt-1 text-sm text-slate-600">Duration: {firstValue(course.duration, "N/A")}</p>
-                        <p className="mt-1 text-sm text-slate-600">Status: {firstValue(course.status, "active")}</p>
-                        <p className="mt-1 text-sm text-slate-600">Students enrolled: {courseEnrollmentById.get(String(course.id)) || 0}</p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          disabled={saving}
-                          onClick={() => toggleCourseStatus(course)}
-                          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-70"
-                        >
-                          {(course.status || "active").toLowerCase() === "active" ? "Set Inactive" : "Set Active"}
-                        </button>
-                        <button
-                          type="button"
-                          disabled={saving}
-                          onClick={() => removeCourse(course)}
-                          className="rounded-lg bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-70"
-                        >
-                          Remove
-                        </button>
+                  <article key={course.id} className="overflow-hidden rounded-2xl border border-cert-line bg-slate-50 shadow-[0_16px_35px_-30px_rgba(7,26,47,0.38)]">
+                    <div className="grid md:grid-cols-[13rem_minmax(0,1fr)]">
+                      {course.thumbnail_url ? (
+                        <img src={course.thumbnail_url} alt={`${firstValue(course.title, course.name, "Course")} course cover`} className="h-52 w-full object-cover md:h-full" />
+                      ) : (
+                        <div className="relative flex min-h-52 overflow-hidden bg-[radial-gradient(circle_at_82%_76%,rgba(49,201,111,0.55),transparent_24%),linear-gradient(145deg,#061e33_0%,#082d48_65%,#0b7650_100%)] p-5 text-white">
+                          <div className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-xl bg-white px-2.5 py-2 shadow-[0_10px_24px_-16px_rgba(0,0,0,0.9)]">
+                            <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-cert-ink text-cert-green">
+                              <ShieldCheck size={18} strokeWidth={2.8} aria-hidden="true" />
+                            </span>
+                            <span className="text-xs font-black tracking-tight text-cert-ink">CERTISURED</span>
+                          </div>
+                          <div className="mt-auto">
+                            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cert-green">Online learning</p>
+                            <p className="mt-2 text-xl font-semibold leading-tight">{firstValue(course.title, course.name, course.course_name, "Course")}</p>
+                            <span className="mt-4 inline-block rounded-md bg-cert-green px-2.5 py-1 text-xs font-bold text-cert-ink">{firstValue(course.duration, "Flexible duration")}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex min-w-0 flex-col p-5 sm:p-6">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <h3 className="text-2xl font-semibold text-cert-ink">{firstValue(course.title, course.name, course.course_name, "Untitled course")}</h3>
+                            <p className="mt-2 text-sm font-medium text-cert-ink">{firstValue(course.duration, "Duration unavailable")} | Online</p>
+                          </div>
+                          <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${(course.status || "active").toLowerCase() === "active" ? "bg-cert-green/15 text-cert-green-dark" : "bg-slate-200 text-slate-600"}`}>
+                            {course.status || "active"}
+                          </span>
+                        </div>
+                        <p className="mt-4 text-sm leading-6 text-slate-600">{firstValue(course.description, course.course_description, "Course description will be added soon.")}</p>
+                        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-cert-line pt-4">
+                          <p className="inline-flex items-center gap-2 text-sm font-medium text-slate-600"><UsersRound size={17} className="text-cert-green-dark" aria-hidden="true" /> {courseEnrollmentById.get(String(course.id)) || 0} students enrolled</p>
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  </article>
                 ))}
               </div>
-            </div>
-
-            <form onSubmit={createCourse} className="rounded-[1.75rem] border border-cert-line bg-white p-6">
-              <h3 className="text-xl font-semibold text-cert-ink">Create Course</h3>
-              <p className="mt-2 text-sm text-slate-500">Add course name, description, duration, and status.</p>
+            <form onSubmit={createCourse} className="h-fit rounded-[1.75rem] border border-cert-line bg-white p-6 xl:sticky xl:top-28">
+              <h2 className="text-xl font-semibold text-cert-ink">Create Course</h2>
+              <p className="mt-2 text-sm text-slate-500">Add a course for student enrollment and trainer mapping.</p>
               <div className="mt-5 space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Course name</label>
-                  <input
-                    value={courseTitle}
-                    onChange={(event) => setCourseTitle(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
-                    placeholder="Full Stack Development"
-                    required
-                  />
+                  <input value={courseTitle} onChange={(event) => setCourseTitle(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" placeholder="Full Stack Development" required />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Description</label>
-                  <input
-                    value={courseDescription}
-                    onChange={(event) => setCourseDescription(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
-                    placeholder="Course description"
-                    required
-                  />
+                  <input value={courseDescription} onChange={(event) => setCourseDescription(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" placeholder="Course description" required />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Duration</label>
-                  <input
-                    value={courseDuration}
-                    onChange={(event) => setCourseDuration(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
-                    placeholder="16 weeks"
-                    required
-                  />
+                  <input value={courseDuration} onChange={(event) => setCourseDuration(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" placeholder="16 weeks" required />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Status</label>
-                  <select
-                    value={courseStatus}
-                    onChange={(event) => setCourseStatus(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
-                  >
+                  <select value={courseStatus} onChange={(event) => setCourseStatus(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15">
                     <option value="active">Active</option>
                     <option value="inactive">Inactive</option>
                   </select>
                 </div>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="w-full rounded-xl bg-cert-navy px-4 py-3 text-sm font-semibold text-white hover:bg-cert-ink disabled:opacity-70"
-                >
+                <button type="submit" disabled={saving} className="w-full rounded-xl bg-cert-navy px-4 py-3 text-sm font-semibold text-white transition hover:bg-cert-ink disabled:opacity-70">
                   {saving ? "Saving..." : "Create course"}
                 </button>
               </div>
@@ -2070,20 +2048,45 @@ export default function AdminDashboard() {
               <p className="mt-2 text-sm text-slate-500">Assign students to trainers and map students to courses.</p>
               <div className="mt-6 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700">Student</label>
-                  <select
-                    value={mapStudentId}
-                    onChange={(event) => setMapStudentId(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
-                    required
+                  <label className="block text-sm font-medium text-slate-700">Students</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowStudentPicker((open) => !open)}
+                    aria-expanded={showStudentPicker}
+                    className="mt-2 flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm text-cert-ink outline-none transition hover:border-cert-green hover:bg-white focus:border-cert-green focus:ring-4 focus:ring-cert-green/15"
                   >
-                    <option value="">Select student</option>
-                    {enrichedStudents.map((student) => (
-                      <option key={student.id} value={student.id}>
-                        {firstValue(student.full_name, student.name, student.email, student.id)}
-                      </option>
-                    ))}
-                  </select>
+                    <span>{mapStudentIds.length ? `${mapStudentIds.length} student${mapStudentIds.length === 1 ? "" : "s"} selected` : "Select students"}</span>
+                    <span className="text-lg leading-none text-slate-500" aria-hidden="true">{showStudentPicker ? "⌃" : "⌄"}</span>
+                  </button>
+                  {showStudentPicker && <div className="mt-2 max-h-52 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-3 border-b border-cert-line px-2 pb-2">
+                      <p className="text-xs text-slate-500">Choose one or more students.</p>
+                      <button
+                        type="button"
+                        onClick={() => setMapStudentIds(mapStudentIds.length === enrichedStudents.length ? [] : enrichedStudents.map((student) => String(student.id)))}
+                        className="text-xs font-semibold text-cert-green-dark hover:underline"
+                      >
+                        {mapStudentIds.length === enrichedStudents.length ? "Clear all" : "Select all"}
+                      </button>
+                    </div>
+                    {enrichedStudents.length === 0 ? (
+                      <p className="px-2 py-1 text-sm text-slate-500">No students available.</p>
+                    ) : enrichedStudents.map((student) => {
+                      const studentId = String(student.id);
+                      const selected = mapStudentIds.includes(studentId);
+                      return (
+                        <label key={student.id} className={`flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm transition ${selected ? "bg-cert-green/15 text-cert-ink" : "hover:bg-white"}`}>
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => setMapStudentIds((current) => selected ? current.filter((id) => id !== studentId) : [...current, studentId])}
+                            className="h-4 w-4 accent-emerald-500"
+                          />
+                          {firstValue(student.full_name, student.name, student.email, student.id)}
+                        </label>
+                      );
+                    })}
+                  </div>}
                 </div>
 
                 <div>
@@ -2132,7 +2135,7 @@ export default function AdminDashboard() {
           </section>
         )}
 
-        {(activeTab === "overview" || activeTab === "analytics") && renderAnalytics()}
+        {activeTab === "analytics" && renderAnalytics()}
       </div>
     </div>
   );
