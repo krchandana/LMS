@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   Bell,
+  Award,
   BookOpenCheck,
   ChartNoAxesColumn,
   ClipboardList,
@@ -22,6 +23,7 @@ const tabs = [
   { key: "students", label: "Students", path: "/admin/students", icon: GraduationCap },
   { key: "courses", label: "Courses", path: "/admin/courses", icon: BookOpenCheck },
   { key: "mapping", label: "Mapping", path: "/admin/mapping", icon: Link2 },
+  { key: "certificates", label: "Certificates", path: "/admin/certificates", icon: Award },
   { key: "analytics", label: "Analytics", path: "/admin/analytics", icon: ChartNoAxesColumn },
 ];
 
@@ -473,6 +475,7 @@ export default function AdminDashboard() {
   const [studentRecords, setStudentRecords] = useState([]);
   const [studentCourseRows, setStudentCourseRows] = useState([]);
   const [enrollmentRows, setEnrollmentRows] = useState([]);
+  const [certificates, setCertificates] = useState([]);
 
   const [trainerName, setTrainerName] = useState("");
   const [trainerEmail, setTrainerEmail] = useState("");
@@ -503,6 +506,8 @@ export default function AdminDashboard() {
           ? "courses"
           : location.pathname.endsWith("/mapping")
             ? "mapping"
+            : location.pathname.endsWith("/certificates")
+              ? "certificates"
             : location.pathname.endsWith("/analytics")
               ? "analytics"
               : location.pathname.endsWith("/admin")
@@ -597,6 +602,16 @@ export default function AdminDashboard() {
         .select("*")
         .limit(1000);
 
+      const certificatesRes = await supabase
+        .from("certificates")
+        .select("*")
+        .order("issue_date", { ascending: false })
+        .limit(1000);
+
+      const certificatesServiceRes = (hasServiceRoleKey && (certificatesRes.error || !(certificatesRes.data || []).length))
+        ? await serviceRoleTableRequest("certificates", "?select=*&order=issue_date.desc&limit=1000", "GET")
+        : { data: [], error: null };
+
       let nextRequests = (requestsRes.data || []).map((item) => ({ ...item, source: "access_requests" }));
 
       if (requestsRes.error && missingTable(requestsRes.error)) {
@@ -672,6 +687,11 @@ export default function AdminDashboard() {
           ? (enrollmentRes.data || [])
           : (enrollmentServiceRes.error ? [] : (Array.isArray(enrollmentServiceRes.data) ? enrollmentServiceRes.data : [])));
       const nextStudentCourseRows = nextEnrollmentRows.length ? nextEnrollmentRows : (studentCourseRes.error ? [] : (studentCourseRes.data || []));
+      const nextCertificates = certificatesRes.error
+        ? (certificatesServiceRes.error ? [] : (Array.isArray(certificatesServiceRes.data) ? certificatesServiceRes.data : []))
+        : ((certificatesRes.data || []).length
+          ? (certificatesRes.data || [])
+          : (certificatesServiceRes.error ? [] : (Array.isArray(certificatesServiceRes.data) ? certificatesServiceRes.data : [])));
 
       setRequests(nextRequests);
       setTrainers(nextTrainers);
@@ -681,6 +701,7 @@ export default function AdminDashboard() {
       setStudentRecords(nextStudentRecords);
       setEnrollmentRows(nextEnrollmentRows);
       setStudentCourseRows(nextStudentCourseRows);
+      setCertificates(nextCertificates);
     } catch (err) {
       console.error("Data load error:", err);
       setError("Error loading data. Some tables may not exist.");
@@ -707,6 +728,15 @@ export default function AdminDashboard() {
     () => new Map(trainers.map((trainer) => [String(trainer.id), firstValue(trainer.full_name, trainer.name, trainer.email, "Unknown trainer")])),
     [trainers]
   );
+
+  const studentNameById = useMemo(() => {
+    const names = new Map();
+    [...students, ...studentRecords].forEach((student) => {
+      const name = firstValue(student.full_name, student.name, student.email, "Student");
+      [student.id, student.profile_id, student.user_id, student.student_id].filter(Boolean).forEach((id) => names.set(String(id), name));
+    });
+    return names;
+  }, [students, studentRecords]);
 
   const studentRecordByProfile = useMemo(() => {
     const map = new Map();
@@ -2132,6 +2162,50 @@ export default function AdminDashboard() {
                 </button>
               </div>
             </form>
+          </section>
+        )}
+
+        {activeTab === "certificates" && (
+          <section className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
+            <div className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cert-green-dark">Certificate records</p>
+                  <h2 className="mt-2 text-2xl font-semibold text-cert-ink">Issued certificates</h2>
+                  <p className="mt-2 text-sm text-slate-500">Certificates are created automatically after a trainer approves every required assignment and project.</p>
+                </div>
+                <span className="rounded-full bg-cert-mint px-3 py-1.5 text-sm font-semibold text-cert-green-dark">{certificates.length}</span>
+              </div>
+              <div className="mt-6 space-y-3">
+                {certificates.length === 0 ? (
+                  <p className="rounded-2xl bg-cert-mint px-4 py-5 text-sm text-slate-500">No certificates have been issued yet.</p>
+                ) : certificates.map((certificate) => (
+                  <article key={certificate.id || `${certificate.student_id}-${certificate.course_id}`} className="flex flex-col gap-4 rounded-2xl border border-cert-line bg-slate-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-cert-ink text-cert-green"><Award size={21} aria-hidden="true" /></span>
+                      <div>
+                        <p className="font-semibold text-cert-ink">{studentNameById.get(String(certificate.student_id || certificate.profile_id)) || "Student"}</p>
+                        <p className="mt-1 text-sm text-slate-500">{courseNameById.get(String(certificate.course_id)) || "Course"}</p>
+                      </div>
+                    </div>
+                    <div className="text-left sm:text-right">
+                      <p className="text-sm font-semibold text-cert-ink">{certificate.certificate_number || "Certificate issued"}</p>
+                      <p className="mt-1 text-xs text-slate-500">Issued {fmtDate(certificate.issue_date || certificate.created_at)}</p>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </div>
+
+            <aside className="overflow-hidden rounded-[1.75rem] border border-cert-green/35 bg-[linear-gradient(135deg,#ffffff_0%,#f1fbf4_100%)] p-2 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.14)]">
+              <div className="h-full rounded-[1.35rem] border-[3px] border-cert-ink p-6 text-center">
+                <div className="mx-auto inline-flex items-center gap-2 rounded-full bg-cert-ink px-3 py-2 text-xs font-bold tracking-[0.18em] text-white"><ShieldCheck size={15} className="text-cert-green" aria-hidden="true" /> CERTISURED</div>
+                <p className="mt-6 text-[0.65rem] font-bold uppercase tracking-[0.24em] text-cert-green-dark">Stored certificate format</p>
+                <h3 className="mt-3 font-serif text-2xl font-semibold text-cert-ink">Certificate of Completion</h3>
+                <p className="mt-6 text-sm text-slate-500">This is the completion certificate format students receive when their course work is fully approved.</p>
+                <div className="mt-6 border-t border-cert-line pt-4 text-left text-xs text-slate-500"><p className="font-semibold text-cert-ink">Includes</p><p className="mt-2">Student name, course name, certificate number, issue date, and Certisured branding.</p></div>
+              </div>
+            </aside>
           </section>
         )}
 

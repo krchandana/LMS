@@ -234,13 +234,16 @@ export default function TrainerDashboard() {
 
   const completeCourseIfReady = async (studentId, courseId) => {
     const courseAssignments = await fetchRows("assignments", (query) => query.eq("course_id", courseId));
+    const studentAssignments = courseAssignments.filter((assignment) =>
+      !assignment.student_id || String(assignment.student_id) === String(studentId)
+    );
     const studentSubmissions = await fetchRows("submissions", (query) => query.eq("student_id", studentId));
     const studentProjects = await fetchRows("projects", (query) => query.eq("student_id", studentId).eq("course_id", courseId));
-    const assignmentComplete = courseAssignments.every((assignment) =>
+    const assignmentComplete = studentAssignments.every((assignment) =>
       studentSubmissions.some((submission) => String(submission.assignment_id) === String(assignment.id) && submission.status === "approved")
     );
     const projectComplete = studentProjects.every((project) => project.status === "approved");
-    if (!courseAssignments.length && !studentProjects.length) return;
+    if (!studentAssignments.length && !studentProjects.length) return;
     if (!assignmentComplete || !projectComplete) return;
 
     const enrollment = enrollments.find((row) => String(row.student_id) === String(studentId) && String(row.course_id) === String(courseId));
