@@ -570,7 +570,7 @@ export default function AdminDashboard() {
         .eq("role", "student")
         .limit(500);
 
-      const studentsServiceRes = (hasServiceRoleKey && (studentsRes.error || !(studentsRes.data || []).length))
+      const studentsServiceRes = hasServiceRoleKey
         ? await serviceRoleTableRequest(
             "profiles",
             "?select=*&role=eq.student&limit=500",
@@ -583,6 +583,10 @@ export default function AdminDashboard() {
         .select("*")
         .limit(300);
 
+      const coursesServiceRes = hasServiceRoleKey
+        ? await serviceRoleTableRequest("courses", "?select=*&limit=300", "GET")
+        : { data: [], error: null };
+
       const studentRes = await supabase
         .from("students")
         .select("*")
@@ -593,7 +597,7 @@ export default function AdminDashboard() {
         .select("*")
         .limit(1000);
 
-      const enrollmentServiceRes = (hasServiceRoleKey && (enrollmentRes.error || !(enrollmentRes.data || []).length))
+      const enrollmentServiceRes = hasServiceRoleKey
         ? await serviceRoleTableRequest("enrollments", "?select=*&limit=1000", "GET")
         : { data: [], error: null };
 
@@ -674,14 +678,20 @@ export default function AdminDashboard() {
         nextTrainers = fallbackTrainersRes.error ? [] : (fallbackTrainersRes.data || []);
         if (!fallbackTrainersRes.error) nextTrainerTable = "trainers";
       }
-      const nextStudents = studentsRes.error
+      const nextStudents = hasServiceRoleKey && !studentsServiceRes.error
+        ? (Array.isArray(studentsServiceRes.data) ? studentsServiceRes.data : [])
+        : studentsRes.error
         ? (studentsServiceRes.error ? [] : (Array.isArray(studentsServiceRes.data) ? studentsServiceRes.data : []))
         : ((studentsRes.data || []).length
         ? (studentsRes.data || [])
         : (studentsServiceRes.error ? [] : (Array.isArray(studentsServiceRes.data) ? studentsServiceRes.data : [])));
-      const nextCourses = coursesRes.error ? [] : (coursesRes.data || []);
+      const nextCourses = hasServiceRoleKey && !coursesServiceRes.error
+        ? (Array.isArray(coursesServiceRes.data) ? coursesServiceRes.data : [])
+        : (coursesRes.error ? [] : (coursesRes.data || []));
       const nextStudentRecords = studentRes.error ? [] : (studentRes.data || []);
-      const nextEnrollmentRows = enrollmentRes.error
+      const nextEnrollmentRows = hasServiceRoleKey && !enrollmentServiceRes.error
+        ? (Array.isArray(enrollmentServiceRes.data) ? enrollmentServiceRes.data : [])
+        : enrollmentRes.error
         ? (enrollmentServiceRes.error ? [] : (Array.isArray(enrollmentServiceRes.data) ? enrollmentServiceRes.data : []))
         : ((enrollmentRes.data || []).length
           ? (enrollmentRes.data || [])
@@ -748,36 +758,41 @@ export default function AdminDashboard() {
     return map;
   }, [studentRecords]);
 
-  const enrollmentByProfile = useMemo(() => {
-    const map = new Map();
-    studentCourseRows.forEach((record) => {
-      if (record.profile_id) map.set(String(record.profile_id), record);
-      if (record.student_id) map.set(String(record.student_id), record);
-      if (record.user_id) map.set(String(record.user_id), record);
-      if (record.id) map.set(String(record.id), record);
+  // A student can have more than one enrollment. Keep one record per
+  // student-course pair instead of overwriting earlier courses in a Map.
+  const enrollmentRecords = useMemo(() => {
+    const recordsByPair = new Map();
+    [...studentCourseRows, ...enrollmentRows].forEach((record) => {
+      const studentId = firstValue(record.student_id, record.profile_id, record.user_id);
+      const courseId = firstValue(record.course_id, record.course);
+      if (!studentId || !courseId) return;
+      recordsByPair.set(`${String(studentId)}::${String(courseId)}`, record);
     });
-    enrollmentRows.forEach((record) => {
-      if (record.profile_id) map.set(String(record.profile_id), record);
-      if (record.student_id) map.set(String(record.student_id), record);
-      if (record.user_id) map.set(String(record.user_id), record);
-      if (record.id) map.set(String(record.id), record);
+    return Array.from(recordsByPair.values());
+  }, [studentCourseRows, enrollmentRows]);
+
+  const enrollmentsByStudent = useMemo(() => {
+    const map = new Map();
+    enrollmentRecords.forEach((record) => {
+      [record.student_id, record.profile_id, record.user_id]
+        .filter(Boolean)
+        .forEach((studentId) => {
+          const key = String(studentId);
+          const current = map.get(key) || [];
+          if (!current.includes(record)) map.set(key, [...current, record]);
+        });
     });
     return map;
-  }, [studentCourseRows, enrollmentRows]);
+  }, [enrollmentRecords]);
 
   const courseEnrollmentById = useMemo(() => {
     const map = new Map();
-    studentRecords.forEach((record) => {
-      if (record.course_id) map.set(String(record.course_id), (map.get(String(record.course_id)) || 0) + 1);
-    });
-    studentCourseRows.forEach((record) => {
-      if (record.course_id) map.set(String(record.course_id), (map.get(String(record.course_id)) || 0) + 1);
-    });
-    enrollmentRows.forEach((record) => {
+    const mappingRows = enrollmentRecords.length ? enrollmentRecords : studentRecords;
+    mappingRows.forEach((record) => {
       if (record.course_id) map.set(String(record.course_id), (map.get(String(record.course_id)) || 0) + 1);
     });
     return map;
-  }, [studentRecords, studentCourseRows, enrollmentRows]);
+  }, [enrollmentRecords, studentRecords]);
 
   const trainerAssignmentsById = useMemo(() => {
     const map = new Map();
@@ -795,7 +810,7 @@ export default function AdminDashboard() {
       courseByTrainer.set(String(course.id), String(course.trainer_id));
     });
 
-    [studentRecords, studentCourseRows, enrollmentRows].forEach((records) => {
+    [studentRecords, enrollmentRecords].forEach((records) => {
       records.forEach((record) => {
         const trainerId = record.trainer_id || courseByTrainer.get(String(record.course_id));
         const studentId = record.student_id || record.profile_id || record.user_id || record.id;
@@ -804,50 +819,84 @@ export default function AdminDashboard() {
     });
 
     return map;
-  }, [courses, studentRecords, studentCourseRows, enrollmentRows]);
+  }, [courses, studentRecords, enrollmentRecords]);
 
   const enrichedStudents = useMemo(
     () =>
       students.map((student) => {
-        const enrollmentRecord = enrollmentByProfile.get(String(student.id));
+        const studentIdentifiers = [student.id, student.profile_id, student.user_id, student.student_id, student.student_login_id]
+          .filter(Boolean)
+          .map(String);
+        const matchingEnrollments = Array.from(
+          new Map(
+            studentIdentifiers
+              .flatMap((studentId) => enrollmentsByStudent.get(studentId) || [])
+              .map((record) => [
+                `${String(firstValue(record.student_id, record.profile_id, record.user_id))}::${String(firstValue(record.course_id, record.course))}`,
+                record,
+              ])
+          ).values()
+        );
         const studentRecord = studentRecordByProfile.get(String(student.id));
-        const record = enrollmentRecord || studentRecord;
-        const courseId = firstValue(student.course_id, enrollmentRecord?.course_id, studentRecord?.course_id);
-        const course = courseById.get(String(courseId));
-        const trainerId = firstValue(student.trainer_id, enrollmentRecord?.trainer_id, studentRecord?.trainer_id, course?.trainer_id);
+        const courseIds = [...new Set([
+          ...matchingEnrollments.map((record) => firstValue(record.course_id, record.course)),
+          student.course_id,
+          studentRecord?.course_id,
+        ].filter(Boolean).map(String))];
+        const enrolledCourses = courseIds.map((courseId) => {
+          const enrollmentRecord = matchingEnrollments.find(
+            (record) => String(firstValue(record.course_id, record.course)) === courseId
+          );
+          const course = courseById.get(courseId);
+          const trainerId = firstValue(enrollmentRecord?.trainer_id, course?.trainer_id, student.trainer_id, studentRecord?.trainer_id);
+          return {
+            course_id: courseId,
+            course_name: firstValue(
+              enrollmentRecord?.course_name,
+              course?.title,
+              course?.name,
+              course?.course_name,
+              student.course_name,
+              studentRecord?.course_name,
+              "Untitled course"
+            ),
+            trainer_id: trainerId,
+            trainer_name: firstValue(
+              enrollmentRecord?.trainer_name,
+              course?.trainer_name,
+              trainerNameById.get(String(trainerId)),
+              student.trainer_name,
+              studentRecord?.trainer_name,
+              "Unassigned"
+            ),
+          };
+        });
+        const primaryEnrollment = matchingEnrollments[0] || studentRecord;
+        const primaryCourse = enrolledCourses[0];
+        const courseId = primaryCourse?.course_id;
+        const trainerId = primaryCourse?.trainer_id;
         const progress = Number(
-          firstValue(enrollmentRecord?.completion_percent, enrollmentRecord?.progress_percent, studentRecord?.completion_percent, studentRecord?.progress_percent, student.completion_percent, 0)
+          firstValue(primaryEnrollment?.completion_percent, primaryEnrollment?.progress_percent, studentRecord?.completion_percent, studentRecord?.progress_percent, student.completion_percent, 0)
         ) || 0;
 
         return {
           ...student,
           course_id: courseId,
           trainer_id: trainerId,
-          student_id: firstValue(student.student_id, student.student_login_id, enrollmentRecord?.student_id, enrollmentRecord?.student_login_id, studentRecord?.student_id, studentRecord?.student_login_id),
-          enrolled_course: firstValue(
-            student.course_name,
-            enrollmentRecord?.course_name,
-            studentRecord?.course_name,
-            courseNameById.get(String(courseId)),
-            "Unassigned"
-          ),
-          trainer_name: firstValue(
-            student.trainer_name,
-            enrollmentRecord?.trainer_name,
-            studentRecord?.trainer_name,
-            trainerNameById.get(String(trainerId)),
-            "Unassigned"
-          ),
+          student_id: firstValue(student.student_id, student.student_login_id, primaryEnrollment?.student_id, primaryEnrollment?.student_login_id, studentRecord?.student_id, studentRecord?.student_login_id),
+          enrolled_courses: enrolledCourses,
+          enrolled_course: enrolledCourses.length ? enrolledCourses.map((course) => course.course_name).join(", ") : "Unassigned",
+          trainer_name: enrolledCourses.length ? [...new Set(enrolledCourses.map((course) => course.trainer_name))].join(", ") : "Unassigned",
           progress,
           certificate_ready: Boolean(
             student.certificate_ready ||
-              enrollmentRecord?.certificate_ready ||
+              primaryEnrollment?.certificate_ready ||
               studentRecord?.certificate_ready ||
               progress >= 100
           ),
         };
       }),
-    [students, studentRecordByProfile, enrollmentByProfile, courseById, courseNameById, trainerNameById]
+    [students, studentRecordByProfile, enrollmentsByStudent, courseById, trainerNameById]
   );
 
   const courseAssignments = useMemo(
@@ -856,14 +905,18 @@ export default function AdminDashboard() {
         ...course,
         course_name: firstValue(course.title, course.name, course.course_name, "Untitled course"),
         trainer_name: trainerNameById.get(String(course.trainer_id)) || "Unassigned",
-        assigned_students: enrichedStudents.filter((student) => String(student.course_id) === String(course.id)),
+        assigned_students: enrichedStudents.filter((student) =>
+          student.enrolled_courses?.some((enrollment) => String(enrollment.course_id) === String(course.id))
+        ),
       })),
     [courses, enrichedStudents, trainerNameById]
   );
 
   const metrics = useMemo(() => {
     const activeCourses = courses.filter((course) => (course.status || "active").toLowerCase() === "active").length;
-    const mappedStudents = enrichedStudents.filter((student) => student.enrolled_course !== "Unassigned" && student.trainer_name !== "Unassigned").length;
+    const mappedStudents = enrichedStudents.filter((student) =>
+      student.enrolled_courses?.some((enrollment) => enrollment.trainer_name !== "Unassigned")
+    ).length;
     const certificateReady = enrichedStudents.filter((student) => student.certificate_ready).length;
     const totalProgress = enrichedStudents.reduce((sum, student) => sum + (student.progress || 0), 0);
     const avgProgress = enrichedStudents.length ? Math.round(totalProgress / enrichedStudents.length) : 0;
@@ -1586,8 +1639,12 @@ export default function AdminDashboard() {
     // Save each selected student after the course trainer is confirmed.
     const failedStudentIds = [];
     for (const studentId of mapStudentIds) {
+      // An enrollment belongs to a student-course pair. Looking up only by
+      // student overwrote the student's previous course enrollment.
       const existingEnrollment = enrollmentRows.find(
-        (enrollment) => String(enrollment.student_id) === String(studentId)
+        (enrollment) =>
+          String(enrollment.student_id) === String(studentId) &&
+          String(enrollment.course_id) === String(mapCourseId)
       );
       const enrollmentPayload = {
         student_id: studentId,
@@ -1616,11 +1673,11 @@ export default function AdminDashboard() {
   };
 
   const statCards = [
-    { label: "Total Students", value: metrics.totalStudents, hint: "Registered student profiles" },
-    { label: "Pending Approvals", value: metrics.pendingApprovals, hint: "Requests waiting action" },
-    { label: "Active Courses", value: metrics.activeCourses, hint: "Courses available now" },
-    { label: "Trainers", value: metrics.totalTrainers, hint: "Trainer profiles" },
-    { label: "Mapped Students", value: metrics.mappedStudents, hint: "Assigned trainer + course" },
+    { label: "Total Students", value: metrics.totalStudents, hint: "Registered student profiles", icon: GraduationCap, tone: "bg-sky-50 text-sky-700 ring-sky-100", accent: "from-sky-400 via-cyan-400 to-emerald-400" },
+    { label: "Pending Approvals", value: metrics.pendingApprovals, hint: "Requests waiting action", icon: ClipboardList, tone: "bg-amber-50 text-amber-700 ring-amber-100", accent: "from-amber-400 via-yellow-400 to-lime-400" },
+    { label: "Active Courses", value: metrics.activeCourses, hint: "Courses available now", icon: BookOpenCheck, tone: "bg-emerald-50 text-emerald-700 ring-emerald-100", accent: "from-emerald-400 via-green-400 to-lime-400" },
+    { label: "Trainers", value: metrics.totalTrainers, hint: "Trainer profiles", icon: UsersRound, tone: "bg-violet-50 text-violet-700 ring-violet-100", accent: "from-violet-400 via-fuchsia-400 to-pink-400" },
+    { label: "Mapped Students", value: metrics.mappedStudents, hint: "Assigned to both trainer and course", icon: Link2, tone: "bg-teal-50 text-teal-700 ring-teal-100", accent: "from-teal-400 via-emerald-400 to-lime-400" },
   ];
 
   const renderAnalytics = () => {
@@ -1631,38 +1688,39 @@ export default function AdminDashboard() {
             <p className="rounded-[1.75rem] border border-cert-line bg-white px-5 py-4 text-sm text-slate-500">No courses have been created yet.</p>
           )}
           {courseAssignments.map((course) => (
-            <article key={course.id} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cert-green-dark">Course</p>
-                  <h3 className="mt-2 text-xl font-semibold text-cert-ink">{course.course_name}</h3>
+            <article key={course.id} className="group overflow-hidden rounded-[1.75rem] border border-cert-line bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.2)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_28px_65px_-34px_rgba(7,26,47,0.28)]">
+              <header className="relative overflow-hidden bg-[radial-gradient(circle_at_88%_12%,rgba(231,232,91,0.32),transparent_30%),linear-gradient(135deg,#062239_0%,#08415a_56%,#0c8a58_128%)] p-5 text-white sm:p-6">
+                <div className="absolute -bottom-12 -right-8 h-36 w-36 rounded-full border border-white/10" />
+                <div className="relative flex items-start justify-between gap-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-cert-yellow backdrop-blur"><BookOpenCheck size={24} aria-hidden="true" /></span>
+                    <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-50/75">Course workspace</p><h3 className="mt-1 truncate text-2xl font-semibold tracking-tight">{course.course_name}</h3></div>
+                  </div>
+                  <span className="shrink-0 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-bold uppercase tracking-[0.14em] text-cert-yellow backdrop-blur">{course.status || "active"}</span>
                 </div>
-                <span className="rounded-full bg-cert-mint px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-cert-green-dark">
-                  {course.status || "active"}
-                </span>
-              </div>
+                <p className="relative mt-5 text-sm text-emerald-50/80">Trainer and student enrollment overview</p>
+              </header>
 
-              <div className="mt-5 rounded-2xl bg-cert-mint px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">Trainer</p>
-                <p className="mt-1 font-semibold text-cert-ink">{course.trainer_name}</p>
-              </div>
-
-              <div className="mt-5">
-                <div className="flex items-center justify-between gap-3">
-                  <p className="text-sm font-semibold text-cert-ink">Assigned students</p>
-                  <span className="rounded-full bg-cert-green/15 px-3 py-1 text-sm font-semibold text-cert-green-dark">
-                    {course.assigned_students.length}
-                  </span>
+              <div className="p-5 sm:p-6">
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                  <div className="flex min-w-0 items-center gap-3 rounded-2xl bg-cert-mint p-4 ring-1 ring-cert-line">
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-cert-green-dark ring-1 ring-cert-line"><UsersRound size={19} aria-hidden="true" /></span>
+                    <div className="min-w-0"><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Assigned trainer</p><p className="mt-1 truncate font-semibold text-cert-ink">{course.trainer_name || "Unassigned"}</p></div>
+                  </div>
+                  <div className="flex min-w-[7rem] items-center justify-center gap-2 rounded-2xl bg-slate-50 px-4 py-3 text-center ring-1 ring-cert-line sm:flex-col sm:gap-0">
+                    <span className="text-2xl font-bold text-cert-ink">{course.assigned_students.length}</span><span className="text-xs font-semibold uppercase tracking-[0.13em] text-slate-500">Students</span>
+                  </div>
                 </div>
-                <div className="mt-3 flex flex-wrap gap-2">
+
+                <div className="mt-5 border-t border-cert-line pt-4">
+                  <div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold text-cert-ink">Enrolled learners</p><span className="rounded-full bg-cert-green/15 px-2.5 py-1 text-xs font-bold text-cert-green-dark">{course.assigned_students.length} mapped</span></div>
                   {course.assigned_students.length === 0 ? (
-                    <p className="text-sm text-slate-500">No students assigned.</p>
+                    <div className="mt-3 flex items-center gap-3 rounded-2xl border border-dashed border-cert-line bg-slate-50 p-4 text-sm text-slate-500"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-slate-400 ring-1 ring-cert-line"><GraduationCap size={18} aria-hidden="true" /></span><span>No students are enrolled in this course yet.</span></div>
                   ) : (
-                    course.assigned_students.map((student) => (
-                      <span key={student.id} className="rounded-full border border-cert-line bg-white px-3 py-2 text-sm text-cert-ink">
-                        {firstValue(student.full_name, student.name, student.email, "Student")}
-                      </span>
-                    ))
+                    <div className="mt-3 flex flex-wrap gap-2">{course.assigned_students.map((student) => {
+                      const studentName = firstValue(student.full_name, student.name, student.email, "Student");
+                      return <span key={student.id} className="inline-flex items-center gap-2 rounded-full border border-cert-line bg-white px-2.5 py-1.5 text-sm font-medium text-cert-ink"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-cert-mint text-[0.65rem] font-bold text-cert-green-dark">{studentName.charAt(0).toUpperCase()}</span>{studentName}</span>;
+                    })}</div>
                   )}
                 </div>
               </div>
@@ -1759,14 +1817,30 @@ export default function AdminDashboard() {
 
             <div className="min-h-[16rem] bg-[radial-gradient(circle_at_90%_0%,rgba(231,232,91,0.14),transparent_32%),linear-gradient(180deg,#f8fcf8_0%,#eef9f1_100%)] p-4 sm:p-6 lg:p-8">
               <div className="grid h-full grid-cols-2 gap-3">
-                {statCards.map((card) => (
-                  <article key={card.label} className="relative overflow-hidden rounded-2xl border border-cert-line bg-white p-4 shadow-[0_20px_48px_-36px_rgba(7,26,47,0.22)] sm:p-5">
-                    <div className="absolute inset-x-0 top-0 h-1 bg-[linear-gradient(90deg,#06324f_0%,#31c96f_55%,#e7e85b_100%)]" />
-                    <p className="text-[0.65rem] font-semibold uppercase tracking-[0.18em] text-slate-500 sm:text-xs">{card.label}</p>
-                    <p className="mt-2 text-3xl font-semibold text-cert-ink sm:text-4xl">{card.value}</p>
-                    <p className="mt-2 text-xs leading-5 text-slate-500 sm:text-sm">{card.hint}</p>
-                  </article>
-                ))}
+                {statCards.map((card, index) => {
+                  const Icon = card.icon;
+                  return (
+                    <article key={card.label} className={`group relative min-h-40 overflow-hidden rounded-2xl border border-cert-line bg-white p-4 shadow-[0_20px_48px_-36px_rgba(7,26,47,0.22)] transition duration-200 hover:-translate-y-0.5 hover:shadow-[0_24px_52px_-32px_rgba(7,26,47,0.26)] sm:p-5 ${index === statCards.length - 1 ? "col-span-2" : ""}`}>
+                      <div className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${card.accent}`} />
+                      <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-slate-50 transition duration-200 group-hover:scale-110" />
+                      <div className="relative flex h-full flex-col justify-between">
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="max-w-[9rem] text-[0.65rem] font-bold uppercase tracking-[0.18em] text-slate-500 sm:text-xs">{card.label}</p>
+                          <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 ${card.tone}`}>
+                            <Icon size={19} aria-hidden="true" />
+                          </span>
+                        </div>
+                        <div className="mt-4">
+                          <p className="text-4xl font-bold tracking-tight text-cert-ink sm:text-5xl">{card.value}</p>
+                          <div className="mt-3 flex items-center justify-between gap-2">
+                            <p className="text-xs leading-5 text-slate-500 sm:text-sm">{card.hint}</p>
+                            <span className="shrink-0 rounded-full bg-slate-50 px-2 py-1 text-[0.6rem] font-bold uppercase tracking-[0.12em] text-slate-500">Live</span>
+                          </div>
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             </div>
           </div>
@@ -1780,26 +1854,51 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "requests" && (
-          <section className="rounded-[1.75rem] border border-cert-line bg-white p-6">
-            <h2 className="text-2xl font-semibold text-cert-ink">Access Requests</h2>
-            <p className="mt-2 text-sm text-slate-500">Review newly registered student accounts and approve or reject them.</p>
-            <div className="mt-6 space-y-4">
-              {requests.length === 0 && <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">No pending requests.</p>}
+          <section className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.22)]">
+            <header className="relative overflow-hidden bg-[radial-gradient(circle_at_92%_20%,rgba(231,232,91,0.3),transparent_28%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_130%)] px-6 py-7 text-white sm:px-8">
+              <div className="absolute -bottom-12 right-10 h-36 w-36 rounded-full border border-white/10" />
+              <div className="relative flex flex-wrap items-center justify-between gap-5">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-cert-yellow">Account access</p>
+                  <h2 className="mt-2 text-3xl font-semibold tracking-tight">Access Requests</h2>
+                  <p className="mt-2 max-w-xl text-sm leading-6 text-emerald-50/85">Review new student registrations and decide who can join the learning platform.</p>
+                </div>
+                <div className="rounded-2xl border border-white/15 bg-white/10 px-5 py-4 text-center backdrop-blur">
+                  <p className="text-xs font-semibold uppercase tracking-[0.16em] text-emerald-50/75">Awaiting review</p>
+                  <p className="mt-1 text-3xl font-bold">{requests.length}</p>
+                </div>
+              </div>
+            </header>
+            <div className="p-5 sm:p-7">
+              {requests.length === 0 && (
+                <div className="flex min-h-56 items-center justify-center rounded-[1.5rem] border border-dashed border-cert-line bg-[radial-gradient(circle_at_50%_0%,rgba(49,201,111,0.12),transparent_45%),#f8fcf9] p-6 text-center">
+                  <div className="max-w-sm">
+                    <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-cert-green/15 text-cert-green-dark ring-1 ring-cert-green/20"><UserCheck size={28} aria-hidden="true" /></span>
+                    <h3 className="mt-4 text-xl font-semibold text-cert-ink">All caught up</h3>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">There are no student access requests waiting for your review right now.</p>
+                    <span className="mt-4 inline-flex rounded-full bg-white px-3 py-1.5 text-xs font-bold uppercase tracking-[0.14em] text-cert-green-dark ring-1 ring-cert-line">0 pending requests</span>
+                  </div>
+                </div>
+              )}
+              {requests.length > 0 && <div className="space-y-4">
               {requests.map((request) => (
-                <div key={`${request.source}-${request.id}`} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                <article key={`${request.source}-${request.id}`} className="rounded-[1.5rem] border border-cert-line bg-slate-50/70 p-5 transition hover:border-cert-green/40 hover:bg-white hover:shadow-[0_18px_40px_-32px_rgba(7,26,47,0.28)]">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-slate-900">{firstValue(request.full_name, request.name, request.email, "Student request")}</p>
-                      {request.email && <p className="mt-1 text-sm text-slate-600">{request.email}</p>}
-                      {request.message && <p className="mt-1 text-sm text-slate-600">{request.message}</p>}
-                      <p className="mt-1 text-xs text-slate-500">Requested on {fmtDate(request.created_at)}</p>
+                    <div className="flex min-w-0 items-start gap-3">
+                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-cert-mint text-cert-green-dark ring-1 ring-cert-line"><GraduationCap size={21} aria-hidden="true" /></span>
+                      <div className="min-w-0">
+                        <p className="truncate text-lg font-semibold text-cert-ink">{firstValue(request.full_name, request.name, request.email, "Student request")}</p>
+                        {request.email && <p className="mt-1 truncate text-sm text-slate-600">{request.email}</p>}
+                        {request.message && <p className="mt-2 text-sm leading-6 text-slate-600">{request.message}</p>}
+                        <p className="mt-3 inline-flex rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-500 ring-1 ring-cert-line">Requested {fmtDate(request.created_at)}</p>
+                      </div>
                     </div>
                     <div className="flex gap-2">
                       <button
                         type="button"
                         disabled={saving}
                         onClick={() => approveRequest(request)}
-                        className="rounded-lg bg-cert-green px-3 py-2 text-sm font-semibold text-cert-ink hover:bg-cert-green-dark hover:text-white disabled:opacity-70"
+                        className="rounded-xl bg-cert-green px-4 py-2.5 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white disabled:opacity-70"
                       >
                         Approve
                       </button>
@@ -1807,14 +1906,15 @@ export default function AdminDashboard() {
                         type="button"
                         disabled={saving}
                         onClick={() => rejectRequest(request)}
-                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-100 disabled:opacity-70"
+                        className="rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 transition hover:bg-slate-100 disabled:opacity-70"
                       >
                         Reject
                       </button>
                     </div>
                   </div>
-                </div>
+                </article>
               ))}
+              </div>}
             </div>
           </section>
         )}
@@ -2072,23 +2172,32 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "mapping" && (
-          <section>
-            <form onSubmit={saveMapping} className="rounded-[1.75rem] border border-cert-line bg-white p-6 max-w-2xl">
-              <h2 className="text-2xl font-semibold text-cert-ink">Mapping</h2>
-              <p className="mt-2 text-sm text-slate-500">Assign students to trainers and map students to courses.</p>
-              <div className="mt-6 space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700">Students</label>
+          <section className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(19rem,0.65fr)] xl:items-start">
+            <form onSubmit={saveMapping} className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.22)]">
+              <div className="relative overflow-hidden bg-[radial-gradient(circle_at_90%_16%,rgba(231,232,91,0.3),transparent_28%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_130%)] px-6 py-7 text-white sm:px-8">
+                <div className="absolute -bottom-10 right-8 h-28 w-28 rounded-full border border-white/10" />
+                <div className="relative flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-[0.24em] text-cert-yellow">Enrollment workflow</p>
+                    <h2 className="mt-2 text-3xl font-semibold tracking-tight">Map learning access</h2>
+                    <p className="mt-2 max-w-xl text-sm leading-6 text-emerald-50/85">Choose students, then connect them to the right trainer and course.</p>
+                  </div>
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-cert-yellow backdrop-blur"><Link2 size={23} aria-hidden="true" /></span>
+                </div>
+              </div>
+              <div className="space-y-5 p-5 sm:p-7">
+                <div className="rounded-2xl border border-cert-line bg-slate-50/70 p-4">
+                  <label className="flex items-center gap-3 text-sm font-semibold text-cert-ink"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-cert-green text-sm font-bold text-cert-ink">1</span><span>Choose students <small className="ml-1 font-normal text-slate-500">Select one or more</small></span></label>
                   <button
                     type="button"
                     onClick={() => setShowStudentPicker((open) => !open)}
                     aria-expanded={showStudentPicker}
-                    className="mt-2 flex w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-sm text-cert-ink outline-none transition hover:border-cert-green hover:bg-white focus:border-cert-green focus:ring-4 focus:ring-cert-green/15"
+                    className="mt-4 flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-cert-ink outline-none transition hover:border-cert-green focus:border-cert-green focus:ring-4 focus:ring-cert-green/15"
                   >
                     <span>{mapStudentIds.length ? `${mapStudentIds.length} student${mapStudentIds.length === 1 ? "" : "s"} selected` : "Select students"}</span>
                     <span className="text-lg leading-none text-slate-500" aria-hidden="true">{showStudentPicker ? "⌃" : "⌄"}</span>
                   </button>
-                  {showStudentPicker && <div className="mt-2 max-h-52 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  {showStudentPicker && <div className="mt-3 max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3">
                     <div className="flex items-center justify-between gap-3 border-b border-cert-line px-2 pb-2">
                       <p className="text-xs text-slate-500">Choose one or more students.</p>
                       <button
@@ -2119,12 +2228,12 @@ export default function AdminDashboard() {
                   </div>}
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700">Trainer</label>
+                <div className="rounded-2xl border border-cert-line bg-slate-50/70 p-4">
+                  <label className="flex items-center gap-3 text-sm font-semibold text-cert-ink"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-cert-green text-sm font-bold text-cert-ink">2</span><span>Choose trainer <small className="ml-1 font-normal text-slate-500">Set the learning owner</small></span></label>
                   <select
                     value={mapTrainerId}
                     onChange={(event) => setMapTrainerId(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
+                    className="mt-4 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15"
                     required
                   >
                     <option value="">Select trainer</option>
@@ -2136,12 +2245,12 @@ export default function AdminDashboard() {
                   </select>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-slate-700">Course</label>
+                <div className="rounded-2xl border border-cert-line bg-slate-50/70 p-4">
+                  <label className="flex items-center gap-3 text-sm font-semibold text-cert-ink"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-cert-green text-sm font-bold text-cert-ink">3</span><span>Choose course <small className="ml-1 font-normal text-slate-500">Enroll selected students</small></span></label>
                   <select
                     value={mapCourseId}
                     onChange={(event) => setMapCourseId(event.target.value)}
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
+                    className="mt-4 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15"
                     required
                   >
                     <option value="">Select course</option>
@@ -2156,12 +2265,34 @@ export default function AdminDashboard() {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="w-full rounded-xl bg-cert-navy px-4 py-3 text-sm font-semibold text-white hover:bg-cert-ink disabled:opacity-70"
+                  className="flex w-full items-center justify-center gap-2 rounded-xl bg-[linear-gradient(135deg,#06324f_0%,#0d8f55_100%)] px-4 py-3.5 text-sm font-semibold text-white shadow-[0_18px_30px_-20px_rgba(6,50,79,0.65)] transition hover:brightness-110 disabled:opacity-70"
                 >
-                  {saving ? "Saving..." : "Save mapping"}
+                  <Link2 size={17} aria-hidden="true" />{saving ? "Saving mapping..." : "Save mapping"}
                 </button>
               </div>
             </form>
+            <aside className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.18)] xl:sticky xl:top-28">
+              <div className="bg-cert-mint p-6">
+                <p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Mapping preview</p>
+                <h3 className="mt-2 text-2xl font-semibold text-cert-ink">Ready to connect</h3>
+                <p className="mt-2 text-sm leading-6 text-slate-600">Review the selected learning path before saving.</p>
+              </div>
+              <div className="space-y-3 p-5">
+                <div className="flex items-center gap-3 rounded-2xl border border-cert-line p-4">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 text-sky-700"><GraduationCap size={20} aria-hidden="true" /></span>
+                  <div><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Students</p><p className="mt-1 font-semibold text-cert-ink">{mapStudentIds.length ? `${mapStudentIds.length} selected` : "Not selected"}</p></div>
+                </div>
+                <div className="flex items-center gap-3 rounded-2xl border border-cert-line p-4">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50 text-violet-700"><UsersRound size={20} aria-hidden="true" /></span>
+                  <div><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Trainer</p><p className="mt-1 font-semibold text-cert-ink">{mapTrainerId ? "Selected" : "Not selected"}</p></div>
+                </div>
+                <div className="flex items-center gap-3 rounded-2xl border border-cert-line p-4">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"><BookOpenCheck size={20} aria-hidden="true" /></span>
+                  <div><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Course</p><p className="mt-1 font-semibold text-cert-ink">{mapCourseId ? "Selected" : "Not selected"}</p></div>
+                </div>
+                <div className="rounded-2xl bg-cert-ink p-4 text-sm leading-6 text-emerald-50"><p className="font-semibold text-white">What happens next?</p><p className="mt-1">Students receive course access, and their trainer can create assignments and projects for them.</p></div>
+              </div>
+            </aside>
           </section>
         )}
 

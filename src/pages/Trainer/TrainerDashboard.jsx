@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpenCheck, CheckCircle2, ClipboardCheck, LogOut, Plus, Sparkles, UsersRound } from "lucide-react";
+import { BookOpenCheck, CheckCircle2, ClipboardCheck, LogOut, Plus, Sparkles, UsersRound, Video } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
@@ -21,6 +21,14 @@ const formatAssignedDate = (date) => {
     ? "Date unavailable"
     : new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" }).format(parsed);
 };
+const formatVideoAvailability = (date) => {
+  if (!date) return "Available 24 hours after posting";
+  const parsed = new Date(date);
+  return Number.isNaN(parsed.getTime())
+    ? "Available 24 hours after posting"
+    : `Available ${new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(parsed)}`;
+};
+const videoIsActive = (video) => Boolean(video?.available_at) && new Date(video.available_at).getTime() <= Date.now();
 
 const fetchRows = async (table, buildQuery) => {
   try {
@@ -63,13 +71,14 @@ export default function TrainerDashboard() {
   const [assignments, setAssignments] = useState([]);
   const [projects, setProjects] = useState([]);
   const [submissions, setSubmissions] = useState([]);
+  const [courseVideos, setCourseVideos] = useState([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [assignmentForm, setAssignmentForm] = useState({ courseId: "", title: "", description: "", dueDate: "" });
   const [projectForm, setProjectForm] = useState({ courseId: "", title: "", description: "" });
+  const [videoForm, setVideoForm] = useState({ courseId: "", title: "", lessonDate: new Date().toISOString().slice(0, 10), videoUrl: "" });
   const [reviewNotes, setReviewNotes] = useState({});
-  // Make new student work the first thing a trainer sees after signing in.
-  const [activeWorkspace, setActiveWorkspace] = useState("assignment-submissions");
+  const [activeWorkspace, setActiveWorkspace] = useState("overview");
 
   const loadDashboard = async () => {
     if (!profile?.id) return;
@@ -119,6 +128,14 @@ export default function TrainerDashboard() {
     const submissionRows = allSubmissions
       .filter((submission) => assignmentIds.some((assignmentId) => String(assignmentId) === String(submission.assignment_id)))
       .sort((first, second) => String(second.submitted_at || "").localeCompare(String(first.submitted_at || "")));
+    const allCourseVideos = courseIds.length
+      ? (hasServiceRoleKey
+        ? await fetchRowsWithServiceRole("course_videos")
+        : await fetchRows("course_videos", (query) => query.in("course_id", courseIds).order("created_at", { ascending: false })))
+      : [];
+    const videoRows = allCourseVideos
+      .filter((video) => courseIds.some((courseId) => String(courseId) === String(video.course_id)))
+      .sort((first, second) => String(second.created_at || "").localeCompare(String(first.created_at || "")));
 
     setCourses(trainerCourses);
     setEnrollments(enrollmentRows);
@@ -126,6 +143,7 @@ export default function TrainerDashboard() {
     setAssignments(assignmentRows);
     setProjects(projectRows);
     setSubmissions(submissionRows);
+    setCourseVideos(videoRows);
     setLoading(false);
   };
 
@@ -309,10 +327,10 @@ export default function TrainerDashboard() {
 
   return (
     <div className="cert-bg-trainer min-h-screen px-4 py-4 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl space-y-6">
+      <div className="w-full space-y-6">
         <nav className="sticky top-3 z-20 flex flex-wrap items-center justify-between gap-3 rounded-[1.75rem] border border-cert-line bg-white/95 p-3 shadow-[0_18px_50px_-35px_rgba(15,23,42,0.4)] backdrop-blur">
-          <span className="px-3 text-sm font-semibold text-cert-green-dark">Trainer workspace</span>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => openWorkspace("overview")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "overview" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Sparkles size={16} /> Overview</button>
             <button type="button" onClick={() => openWorkspace("create-assignment")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "create-assignment" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Create assignment</button>
             <button type="button" onClick={() => openWorkspace("assign-project")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "assign-project" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Assign project</button>
             <button type="button" onClick={() => openWorkspace("project-reviews")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "project-reviews" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Project reviews</button>
@@ -323,46 +341,62 @@ export default function TrainerDashboard() {
           </div>
         </nav>
 
-        <section className="cert-glass-panel rounded-[2.5rem] p-8 text-cert-ink shadow-[0_28px_80px_-40px_rgba(15,23,42,0.18)]">
-          <div className="flex flex-wrap items-start justify-between gap-6">
+        {activeWorkspace === "overview" && <section className="space-y-6">
+          <div className="relative overflow-hidden rounded-[2rem] bg-[radial-gradient(circle_at_88%_12%,rgba(231,232,91,0.32),transparent_24%),linear-gradient(135deg,#062239_0%,#08415a_56%,#0c8a58_135%)] p-7 text-white shadow-[0_28px_70px_-38px_rgba(7,26,47,0.5)] sm:p-9">
+            <div className="absolute -bottom-24 -right-16 h-64 w-64 rounded-full border border-white/10" />
+            <div className="relative flex flex-wrap items-start justify-between gap-6">
             <div>
-              <p className="inline-flex items-center gap-2 rounded-full bg-cert-mint px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-cert-green-dark"><Sparkles size={14} /> Trainer dashboard</p>
-              <h1 className="mt-4 text-4xl font-semibold tracking-tight">Hello, {profile.full_name || "Trainer"}</h1>
-              <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-600">Create course work, review student submissions, and approve completed learning outcomes.</p>
+              <p className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-cert-yellow backdrop-blur"><Sparkles size={14} /> Trainer dashboard</p>
+              <h1 className="mt-4 text-4xl font-semibold tracking-tight text-white">Hello, {profile.full_name || "Trainer"}</h1>
+              <p className="mt-3 max-w-2xl text-sm leading-7 text-emerald-50/85">Create course work, review student submissions, and approve completed learning outcomes.</p>
             </div>
             <div className="grid grid-cols-3 gap-3 text-center">
-              <div className="rounded-2xl bg-cert-mint px-4 py-3"><UsersRound size={18} className="mx-auto text-cert-green-dark" /><p className="mt-2 text-lg font-semibold">{students.length}</p><p className="text-xs text-slate-500">Students</p></div>
-              <div className="rounded-2xl bg-cert-mint px-4 py-3"><BookOpenCheck size={18} className="mx-auto text-cert-green-dark" /><p className="mt-2 text-lg font-semibold">{assignments.length}</p><p className="text-xs text-slate-500">Assignments</p></div>
-              <button type="button" onClick={() => openWorkspace("assignment-submissions")} className="rounded-2xl bg-cert-mint px-4 py-3 transition hover:bg-cert-green/20"><ClipboardCheck size={18} className="mx-auto text-cert-green-dark" /><p className="mt-2 text-lg font-semibold">{awaitingSubmissions.length + awaitingProjects.length}</p><p className="text-xs text-slate-500">To review</p></button>
+              <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur"><UsersRound size={18} className="mx-auto text-cert-yellow" /><p className="mt-2 text-lg font-semibold text-white">{students.length}</p><p className="text-xs text-emerald-50/80">Students</p></div>
+              <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur"><BookOpenCheck size={18} className="mx-auto text-cert-yellow" /><p className="mt-2 text-lg font-semibold text-white">{assignments.length}</p><p className="text-xs text-emerald-50/80">Assignments</p></div>
+              <button type="button" onClick={() => openWorkspace("assignment-submissions")} className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur transition hover:bg-white/20"><ClipboardCheck size={18} className="mx-auto text-cert-yellow" /><p className="mt-2 text-lg font-semibold text-white">{awaitingSubmissions.length + awaitingProjects.length}</p><p className="text-xs text-emerald-50/80">To review</p></button>
+            </div>
             </div>
           </div>
-        </section>
+          <div className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-38px_rgba(7,26,47,0.18)] sm:p-7">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Teaching portfolio</p><h2 className="mt-2 text-2xl font-semibold tracking-tight">Course details</h2><p className="mt-1 text-sm text-slate-500">See every course you lead and its enrolled students.</p></div>
+              <span className="rounded-full bg-cert-mint px-3 py-1.5 text-sm font-semibold text-cert-green-dark">{courses.length} {courses.length === 1 ? "course" : "courses"}</span>
+            </div>
+            {courses.length === 0 ? <div className="mt-5 rounded-2xl border border-dashed border-cert-line bg-slate-50 px-5 py-7 text-center text-sm text-slate-500">No courses are assigned to you yet.</div> : <div className="mt-5 grid gap-4 lg:grid-cols-2">{courses.map((course) => {
+              const courseStudentIds = enrolledStudentIds(course.id);
+              return <article key={course.id} className="overflow-hidden rounded-2xl border border-cert-line bg-white shadow-[0_16px_38px_-30px_rgba(7,26,47,0.22)]">
+                <div className="flex items-start justify-between gap-4 border-b border-cert-line bg-[linear-gradient(135deg,#f4fff8_0%,#e9f8ef_100%)] p-5"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Course</p><h3 className="mt-2 text-xl font-semibold text-cert-ink">{titleFor(course, "Course")}</h3><p className="mt-2 text-sm leading-6 text-slate-600">{course.description || "Learning workspace managed by you."}</p></div><span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold uppercase tracking-[0.12em] text-cert-green-dark ring-1 ring-cert-line">{course.status || "active"}</span></div>
+                <div className="p-5"><div className="flex items-center justify-between gap-3"><p className="text-sm font-semibold text-cert-ink">Enrolled students</p><span className="rounded-full bg-cert-green/15 px-2.5 py-1 text-xs font-bold text-cert-green-dark">{courseStudentIds.length}</span></div>{courseStudentIds.length === 0 ? <p className="mt-3 rounded-xl bg-slate-50 px-3 py-3 text-sm text-slate-500">No students are enrolled in this course yet.</p> : <div className="mt-3 flex flex-wrap gap-2">{courseStudentIds.map((studentId) => { const student = studentById.get(String(studentId)); const name = titleFor(student, "Student"); return <span key={studentId} className="inline-flex items-center gap-2 rounded-full border border-cert-line bg-white px-2.5 py-1.5 text-sm font-medium text-cert-ink"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-cert-mint text-xs font-bold text-cert-green-dark">{name.charAt(0).toUpperCase()}</span>{name}</span>; })}</div>}</div>
+              </article>;
+            })}</div>}
+          </div>
+        </section>}
 
         {(error || message) && <p className={`rounded-2xl px-4 py-3 text-sm ${error ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>{error || message}</p>}
 
         {(activeWorkspace === "create-assignment" || activeWorkspace === "assign-project") && (
-          <section className="mx-auto grid w-full max-w-7xl gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          {activeWorkspace === "create-assignment" && <form id="create-assignment" onSubmit={createAssignment} className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-            <h2 className="inline-flex items-center gap-2 text-xl font-semibold text-cert-ink"><Plus size={20} /> Create assignment</h2>
-            <div className="mt-5 grid gap-3">
-              <select value={assignmentForm.courseId} onChange={(e) => setAssignmentForm({ ...assignmentForm, courseId: e.target.value })} className="rounded-xl border border-cert-line bg-cert-mint px-4 py-3" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select>
-              <input value={assignmentForm.title} onChange={(e) => setAssignmentForm({ ...assignmentForm, title: e.target.value })} placeholder="Assignment title" className="rounded-xl border border-cert-line px-4 py-3" required />
-              <textarea value={assignmentForm.description} onChange={(e) => setAssignmentForm({ ...assignmentForm, description: e.target.value })} placeholder="Instructions" className="min-h-24 rounded-xl border border-cert-line px-4 py-3" />
-              <input type="date" value={assignmentForm.dueDate} onChange={(e) => setAssignmentForm({ ...assignmentForm, dueDate: e.target.value })} className="rounded-xl border border-cert-line px-4 py-3" />
-              <button className="rounded-xl bg-cert-green px-4 py-3 font-semibold text-cert-ink">Create assignment</button>
+          <section className="grid w-full gap-5 xl:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">
+          {activeWorkspace === "create-assignment" && <form id="create-assignment" onSubmit={createAssignment} className="overflow-hidden rounded-[1.9rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
+            <header className="relative overflow-hidden bg-[radial-gradient(circle_at_88%_12%,rgba(231,232,91,0.3),transparent_30%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_140%)] px-6 py-7 text-white"><div className="absolute -bottom-10 right-7 h-28 w-28 rounded-full border border-white/10" /><div className="relative"><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-yellow">Assignment builder</p><h2 className="mt-2 inline-flex items-center gap-2 text-2xl font-semibold"><Plus size={22} /> Create assignment</h2><p className="mt-2 text-sm leading-6 text-emerald-50/85">Set the course, instructions, and due date for your learners.</p></div></header>
+            <div className="grid gap-4 p-5 sm:p-6">
+              <label className="text-sm font-semibold text-cert-ink">Course<select value={assignmentForm.courseId} onChange={(e) => setAssignmentForm({ ...assignmentForm, courseId: e.target.value })} className="mt-2 w-full rounded-xl border border-cert-line bg-cert-mint px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select></label>
+              <label className="text-sm font-semibold text-cert-ink">Assignment title<input value={assignmentForm.title} onChange={(e) => setAssignmentForm({ ...assignmentForm, title: e.target.value })} placeholder="For example: Build a Python calculator" className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label>
+              <label className="text-sm font-semibold text-cert-ink">Instructions<textarea value={assignmentForm.description} onChange={(e) => setAssignmentForm({ ...assignmentForm, description: e.target.value })} placeholder="Explain what students need to complete and submit." className="mt-2 min-h-32 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" /></label>
+              <label className="text-sm font-semibold text-cert-ink">Due date<input type="date" value={assignmentForm.dueDate} onChange={(e) => setAssignmentForm({ ...assignmentForm, dueDate: e.target.value })} className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" /></label>
+              <button className="mt-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[linear-gradient(135deg,#0d8f55_0%,#31c96f_100%)] px-4 py-3.5 font-semibold text-cert-ink shadow-[0_16px_28px_-18px_rgba(13,143,85,0.7)] transition hover:brightness-105"><Plus size={18} /> Create assignment</button>
             </div>
           </form>}
 
-          {activeWorkspace === "create-assignment" && <aside className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
+          {activeWorkspace === "create-assignment" && <aside className="overflow-hidden rounded-[1.9rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
+              <div className="p-6">
                 <h2 className="text-xl font-semibold text-cert-ink">Saved assignments</h2>
                 <p className="mt-1 text-sm text-slate-500">Assignment details ordered by due date.</p>
               </div>
-              <span className="rounded-full bg-cert-mint px-3 py-1 text-sm font-semibold text-cert-green-dark">{assignments.length} total</span>
+              <span className="mr-6 rounded-full bg-cert-mint px-3 py-1 text-sm font-semibold text-cert-green-dark">{assignments.length} total</span>
             </div>
-            <div className="mt-5 max-h-[34rem] space-y-5 overflow-y-auto pr-1">
-              {assignmentsByDate.length === 0 ? <p className="rounded-2xl bg-cert-mint p-4 text-sm text-slate-500">No assignments have been created yet.</p> : assignmentsByDate.map(([date, datedAssignments]) => <div key={date}>
+            <div className="max-h-[42rem] space-y-5 overflow-y-auto border-t border-cert-line p-5 sm:p-6">
+              {assignmentsByDate.length === 0 ? <div className="rounded-2xl border border-dashed border-cert-line bg-[linear-gradient(135deg,#f6fffa_0%,#edf8f2_100%)] px-5 py-12 text-center"><span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-cert-green-dark ring-1 ring-cert-line"><BookOpenCheck size={23} /></span><p className="mt-4 font-semibold text-cert-ink">No assignments yet</p><p className="mt-2 text-sm text-slate-500">New assignments will be organised here by due date.</p></div> : assignmentsByDate.map(([date, datedAssignments]) => <div key={date}>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-cert-green-dark">{formatAssignmentDate(date)}</p>
                 <div className="space-y-3">{datedAssignments.map((assignment) => <article key={assignment.id} className="rounded-2xl border border-cert-line bg-cert-mint/70 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-2">
@@ -419,14 +453,38 @@ export default function TrainerDashboard() {
         )}
 
         {(activeWorkspace === "assignment-submissions" || activeWorkspace === "project-reviews") && (
-          <section className="mx-auto grid w-full max-w-3xl gap-5">
-          {activeWorkspace === "assignment-submissions" && <div id="assignment-submissions" className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-            <h2 className="text-xl font-semibold text-cert-ink">Assignment submissions</h2>
-            <div className="mt-5 space-y-4">{awaitingSubmissions.length === 0 ? <p className="rounded-2xl bg-cert-mint p-4 text-sm text-slate-500">No assignment submissions awaiting review.</p> : awaitingSubmissions.map((submission) => <ReviewCard key={submission.id} title={titleFor(assignmentById.get(String(submission.assignment_id)), "Assignment")} student={titleFor(studentById.get(String(submission.student_id)), "Student")} link={submission.submission_url} notes={reviewNotes[submission.id]} onNotes={(value) => setReviewNotes({ ...reviewNotes, [submission.id]: value })} onApprove={() => reviewSubmission(submission, "approved")} onRework={() => reviewSubmission(submission, "rework")} />)}</div>
+          <section className="grid w-full gap-5">
+          {activeWorkspace === "assignment-submissions" && <div id="assignment-submissions" className="overflow-hidden rounded-[1.75rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
+            <header className="relative overflow-hidden bg-[radial-gradient(circle_at_92%_12%,rgba(231,232,91,0.3),transparent_30%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_140%)] px-6 py-7 text-white">
+              <div className="absolute -bottom-12 right-7 h-32 w-32 rounded-full border border-white/10" />
+              <div className="relative flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-cert-yellow">Review queue</p>
+                  <h2 className="mt-2 text-2xl font-semibold tracking-tight">Assignment submissions</h2>
+                  <p className="mt-2 text-sm leading-6 text-emerald-50/85">Review submitted work, share feedback, and confirm completed assignments.</p>
+                </div>
+                <span className="flex min-w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 px-3 py-3 text-lg font-bold text-cert-yellow backdrop-blur">{awaitingSubmissions.length}</span>
+              </div>
+            </header>
+            <div className="p-5 sm:p-6">
+              {awaitingSubmissions.length === 0 ? <div className="rounded-[1.35rem] border border-dashed border-cert-line bg-[linear-gradient(135deg,#f6fffa_0%,#edf8f2_100%)] px-6 py-9 text-center"><span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-cert-green-dark shadow-sm ring-1 ring-cert-line"><CheckCircle2 size={27} /></span><h3 className="mt-4 text-lg font-semibold text-cert-ink">No work waiting</h3><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500">Assignment submissions will appear here as soon as students send their work for review.</p></div> : <div className="space-y-4">{awaitingSubmissions.map((submission) => <ReviewCard key={submission.id} title={titleFor(assignmentById.get(String(submission.assignment_id)), "Assignment")} student={titleFor(studentById.get(String(submission.student_id)), "Student")} link={submission.submission_url} notes={reviewNotes[submission.id]} onNotes={(value) => setReviewNotes({ ...reviewNotes, [submission.id]: value })} onApprove={() => reviewSubmission(submission, "approved")} onRework={() => reviewSubmission(submission, "rework")} />)}</div>}
+            </div>
           </div>}
-          {activeWorkspace === "project-reviews" && <div id="project-reviews" className="rounded-[1.75rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-            <h2 className="text-xl font-semibold text-cert-ink">Project reviews</h2>
-            <div className="mt-5 space-y-4">{awaitingProjects.length === 0 ? <p className="rounded-2xl bg-cert-mint p-4 text-sm text-slate-500">No projects awaiting review.</p> : awaitingProjects.map((project) => <ReviewCard key={project.id} title={titleFor(project, "Project")} student={titleFor(studentById.get(String(project.student_id)), "Student")} link={project.github_url || project.project_file_url} notes={reviewNotes[project.id]} onNotes={(value) => setReviewNotes({ ...reviewNotes, [project.id]: value })} onApprove={() => reviewProject(project, "approved")} onRework={() => reviewProject(project, "rework")} />)}</div>
+          {activeWorkspace === "project-reviews" && <div id="project-reviews" className="overflow-hidden rounded-[1.75rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
+            <header className="relative overflow-hidden bg-[radial-gradient(circle_at_92%_12%,rgba(231,232,91,0.3),transparent_30%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_140%)] px-6 py-7 text-white">
+              <div className="absolute -bottom-12 right-7 h-32 w-32 rounded-full border border-white/10" />
+              <div className="relative flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-cert-yellow">Review queue</p>
+                  <h2 className="mt-2 text-2xl font-semibold tracking-tight">Project reviews</h2>
+                  <p className="mt-2 text-sm leading-6 text-emerald-50/85">Approve completed projects or return them with clear feedback.</p>
+                </div>
+                <span className="flex min-w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10 px-3 py-3 text-lg font-bold text-cert-yellow backdrop-blur">{awaitingProjects.length}</span>
+              </div>
+            </header>
+            <div className="p-5 sm:p-6">
+              {awaitingProjects.length === 0 ? <div className="rounded-[1.35rem] border border-dashed border-cert-line bg-[linear-gradient(135deg,#f6fffa_0%,#edf8f2_100%)] px-6 py-9 text-center"><span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-cert-green-dark shadow-sm ring-1 ring-cert-line"><CheckCircle2 size={27} /></span><h3 className="mt-4 text-lg font-semibold text-cert-ink">All caught up</h3><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500">No projects are waiting for review. New student submissions will appear here.</p></div> : <div className="space-y-4">{awaitingProjects.map((project) => <ReviewCard key={project.id} title={titleFor(project, "Project")} student={titleFor(studentById.get(String(project.student_id)), "Student")} link={project.github_url || project.project_file_url} notes={reviewNotes[project.id]} onNotes={(value) => setReviewNotes({ ...reviewNotes, [project.id]: value })} onApprove={() => reviewProject(project, "approved")} onRework={() => reviewProject(project, "rework")} />)}</div>}
+            </div>
           </div>}
           </section>
         )}

@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { BookOpenCheck, Eye, EyeOff, GraduationCap, ShieldCheck, UsersRound } from "lucide-react";
+import { Eye, EyeOff, GraduationCap, ShieldCheck, UsersRound } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import heroImage from "../assets/hero.png";
+import certisuredLoginHero from "../assets/certisured-login-hero.png";
 import { supabase } from "../lib/supabaseClient";
 
 const approvedStudentStatuses = ["active", "approved"];
@@ -637,33 +637,24 @@ const LoginPage = () => {
   return (
     <div className="min-h-screen cert-bg-auth px-4 py-5 text-cert-ink sm:px-6 lg:px-8">
       <div className="cert-glass-panel mx-auto grid min-h-[calc(100vh-2.5rem)] w-full max-w-6xl overflow-hidden rounded-[1.5rem] shadow-[0_24px_70px_-48px_rgba(7,26,47,0.5)] ring-1 ring-cert-line/70 lg:grid-cols-[0.9fr_1.1fr]">
-        <aside className="relative hidden min-h-full overflow-hidden bg-cert-navy text-white lg:block">
+        <aside className="relative hidden min-h-full overflow-hidden bg-[#f7fbff] lg:block">
           <img
-            src={heroImage}
-            alt=""
-            className="absolute inset-0 h-full w-full object-cover opacity-30 mix-blend-screen"
+            src={certisuredLoginHero}
+            alt="Students, trainers, and administrators using the Certisured learning platform"
+            className="absolute inset-0 h-full w-full object-contain object-center"
           />
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(231,232,91,0.16),transparent_32%),linear-gradient(148deg,rgba(7,26,47,0.98),rgba(6,50,79,0.93)_54%,rgba(20,155,85,0.82))]" />
-          <div className="relative flex h-full flex-col justify-between p-10">
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.18),rgba(255,255,255,0.04)_45%,rgba(6,34,57,0.1))]" />
+          <div className="relative h-full p-6 sm:p-8">
             <div>
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cert-green text-cert-ink shadow-lg shadow-cert-green/20">
-                <BookOpenCheck size={25} />
-              </div>
-              <p className="mt-8 text-sm font-semibold uppercase tracking-[0.2em] text-cert-yellow">Certilearn portal</p>
-              <h1 className="mt-4 max-w-md text-5xl font-semibold leading-tight tracking-tight">
-                Learning operations in one focused workspace.
-              </h1>
-              <p className="mt-5 max-w-md text-sm leading-6 text-emerald-50/85">
-                Manage access, trainers, student progress, and certification readiness from a calmer dashboard experience.
-              </p>
-            </div>
-            <div className="grid grid-cols-3 gap-3 rounded-2xl border border-white/10 bg-white/10 p-3 backdrop-blur">
-              {["Requests", "Courses", "Progress"].map((label) => (
-                <div key={label} className="rounded-lg bg-white/10 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-50/70">{label}</p>
-                  <p className="mt-2 text-sm font-semibold text-white">Live</p>
+              <div className="inline-flex items-center gap-3 rounded-2xl border border-white/80 bg-white/90 px-3 py-3 shadow-[0_18px_40px_-26px_rgba(7,26,47,0.35)] backdrop-blur" aria-label="Certisured Learning Management System">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cert-ink text-cert-green shadow-lg shadow-cert-ink/20">
+                  <ShieldCheck size={29} aria-hidden="true" />
                 </div>
-              ))}
+                <div>
+                  <p className="text-base font-bold uppercase tracking-[0.22em] text-cert-ink">Certisured</p>
+                  <p className="mt-1 text-xs font-medium uppercase tracking-[0.14em] text-cert-green-dark">Learning Management System</p>
+                </div>
+              </div>
             </div>
           </div>
         </aside>
@@ -671,11 +662,16 @@ const LoginPage = () => {
         <main className="flex items-center bg-[radial-gradient(circle_at_90%_0%,rgba(231,232,91,0.12),transparent_28%),linear-gradient(180deg,#ffffff_0%,#f7fcf8_100%)] px-5 py-8 sm:px-8 lg:px-12">
           <div className="mx-auto w-full max-w-xl">
             <div className="mb-8 lg:hidden">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cert-navy text-cert-green">
-                <BookOpenCheck size={25} />
+              <div className="inline-flex items-center gap-3" aria-label="Certisured Learning Management System">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cert-navy text-cert-green">
+                  <ShieldCheck size={25} aria-hidden="true" />
+                </div>
+                <div>
+                  <p className="text-sm font-bold uppercase tracking-[0.2em] text-cert-green-dark">Certisured</p>
+                  <p className="mt-1 text-[0.65rem] font-medium uppercase tracking-[0.12em] text-slate-500">Learning Management System</p>
+                </div>
               </div>
-              <p className="mt-5 text-sm font-semibold uppercase tracking-[0.2em] text-cert-green-dark">Certilearn portal</p>
-              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-cert-ink">Welcome back</h1>
+              <h1 className="mt-5 text-3xl font-semibold tracking-tight text-cert-ink">Welcome back</h1>
             </div>
 
             <div>

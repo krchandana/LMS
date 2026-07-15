@@ -90,6 +90,21 @@ const firstWorkingList = async (table, builders) => {
   return emptyData;
 };
 
+const fetchRowsWithServiceRole = async (table, params = {}) => {
+  if (!hasServiceRoleKey) return [];
+
+  const search = new URLSearchParams({ select: "*", ...params });
+  const response = await fetch(`${supabaseUrl}/rest/v1/${table}?${search.toString()}`, {
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+    },
+  });
+  if (!response.ok) return [];
+  const rows = await response.json();
+  return Array.isArray(rows) ? rows : [];
+};
+
 const fetchProfilesWithServiceRole = async (ids) => {
   if (!hasServiceRoleKey || !ids.length) return [];
 
@@ -179,33 +194,42 @@ export default function StudentDashboard() {
       const trainerId = student.trainer_id || profile.trainer_id;
       const directCourseIds = [student.course_id, student.course, profile.course_id].filter(Boolean);
 
-      const enrollmentRows = await firstWorkingList("enrollments", [
-        (query) => query.in("student_id", studentIds),
-      ]);
+      const serviceEnrollmentRows = await fetchRowsWithServiceRole("enrollments", {
+        student_id: `in.(${studentIds.join(",")})`,
+      });
+      const enrollmentRows = serviceEnrollmentRows.length
+        ? serviceEnrollmentRows
+        : await firstWorkingList("enrollments", [
+            (query) => query.in("student_id", studentIds),
+          ]);
       const enrolledCourseIds = [...new Set([...directCourseIds, ...enrollmentRows.map((row) => row.course_id || row.id).filter(Boolean)])];
 
-      const courseRows = enrolledCourseIds.length
-        ? await firstWorkingList("courses", [
-            (query) => query.in("id", enrolledCourseIds),
-            (query) => query.in("course_id", enrolledCourseIds),
-          ])
-        : await firstWorkingList("courses", [
-            (query) => query.in("student_id", studentIds),
-            (query) => query.eq("trainer_id", trainerId),
-            (query) => query.eq("status", "active").limit(5),
-          ]);
+      const serviceCourseRows = enrolledCourseIds.length
+        ? await fetchRowsWithServiceRole("courses", { id: `in.(${enrolledCourseIds.join(",")})` })
+        : [];
+      const courseRows = serviceCourseRows.length
+        ? serviceCourseRows
+        : enrolledCourseIds.length
+          ? await firstWorkingList("courses", [
+              (query) => query.in("id", enrolledCourseIds),
+              (query) => query.in("course_id", enrolledCourseIds),
+            ])
+          : await firstWorkingList("courses", [
+              (query) => query.in("student_id", studentIds),
+              (query) => query.eq("trainer_id", trainerId),
+              (query) => query.eq("status", "active").limit(5),
+            ]);
 
       const trainerIds = [...new Set([trainerId, ...courseRows.map((course) => course.trainer_id).filter(Boolean)])];
-      let trainerRows = trainerIds.length
-        ? await firstWorkingList("profiles", [
-            (query) => query.in("id", trainerIds).eq("role", "trainer"),
-            (query) => query.in("id", trainerIds),
-          ])
-        : emptyData;
-
-      if (!trainerRows.length && trainerIds.length) {
-        trainerRows = await fetchProfilesWithServiceRole(trainerIds);
-      }
+      const serviceTrainerRows = trainerIds.length ? await fetchProfilesWithServiceRole(trainerIds) : emptyData;
+      let trainerRows = serviceTrainerRows.length
+        ? serviceTrainerRows
+        : trainerIds.length
+          ? await firstWorkingList("profiles", [
+              (query) => query.in("id", trainerIds).eq("role", "trainer"),
+              (query) => query.in("id", trainerIds),
+            ])
+          : emptyData;
 
       // Some installations keep trainer records in a separate `trainers`
       // table, where the record id and profile id can differ. Fall back to
