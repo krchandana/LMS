@@ -261,11 +261,7 @@ export default function StudentDashboard() {
               (query) => query.in("id", enrolledCourseIds),
               (query) => query.in("course_id", enrolledCourseIds),
             ])
-          : await firstWorkingList("courses", [
-              (query) => query.in("student_id", studentIds),
-              (query) => query.eq("trainer_id", trainerId),
-              (query) => query.eq("status", "active").limit(5),
-            ]);
+          : emptyData;
 
       const trainerIds = [...new Set([trainerId, ...courseRows.map((course) => course.trainer_id).filter(Boolean)])];
       const serviceTrainerRows = trainerIds.length ? await fetchProfilesWithServiceRole(trainerIds) : emptyData;

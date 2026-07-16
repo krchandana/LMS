@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, ClipboardCheck, LogOut, Plus, Sparkles, UsersRound, Video } from "lucide-react";
+import { Award, CheckCircle2, ClipboardCheck, LogOut, Plus, Sparkles, UsersRound, Video } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
@@ -95,6 +95,7 @@ export default function TrainerDashboard() {
   const [assignments, setAssignments] = useState([]);
   const [projects, setProjects] = useState([]);
   const [submissions, setSubmissions] = useState([]);
+  const [certificates, setCertificates] = useState([]);
   const [courseVideos, setCourseVideos] = useState([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -152,6 +153,12 @@ export default function TrainerDashboard() {
     const submissionRows = allSubmissions
       .filter((submission) => assignmentIds.some((assignmentId) => String(assignmentId) === String(submission.assignment_id)))
       .sort((first, second) => String(second.submitted_at || "").localeCompare(String(first.submitted_at || "")));
+    const allCertificates = courseIds.length
+      ? (hasServiceRoleKey
+        ? await fetchRowsWithServiceRole("certificates")
+        : await fetchRows("certificates", (query) => query.in("course_id", courseIds)))
+      : [];
+    const certificateRows = allCertificates.filter((certificate) => courseIds.some((courseId) => String(courseId) === String(certificate.course_id)));
     const allCourseVideos = courseIds.length
       ? (hasServiceRoleKey
         ? await fetchRowsWithServiceRole("course_videos")
@@ -167,6 +174,7 @@ export default function TrainerDashboard() {
     setAssignments(assignmentRows);
     setProjects(projectRows);
     setSubmissions(submissionRows);
+    setCertificates(certificateRows);
     setCourseVideos(videoRows);
     setLoading(false);
   };
@@ -201,6 +209,16 @@ export default function TrainerDashboard() {
 
     return [...groups.values()].sort((first, second) => String(second.assignedAt || "").localeCompare(String(first.assignedAt || "")));
   }, [projects]);
+  const certificateApprovals = useMemo(() => enrollments.map((enrollment) => {
+    const studentId = enrollment.student_id;
+    const courseId = enrollment.course_id;
+    const courseAssignments = assignments.filter((assignment) => String(assignment.course_id) === String(courseId) && (!assignment.student_id || String(assignment.student_id) === String(studentId)));
+    const studentProjects = projects.filter((project) => String(project.course_id) === String(courseId) && String(project.student_id) === String(studentId));
+    const unapprovedAssignments = courseAssignments.filter((assignment) => !submissions.some((submission) => String(submission.assignment_id) === String(assignment.id) && String(submission.student_id) === String(studentId) && submission.status === "approved"));
+    const unapprovedProjects = studentProjects.filter((project) => project.status !== "approved");
+    const pendingCount = unapprovedAssignments.length + unapprovedProjects.length;
+    return { enrollment, studentId, courseId, pendingAssignments: unapprovedAssignments.length, pendingProjects: unapprovedProjects.length, ready: courseAssignments.length + studentProjects.length > 0 && pendingCount === 0 };
+  }), [enrollments, assignments, projects, submissions]);
 
   const enrolledStudentIds = (courseId) => [...new Set(
     enrollments
@@ -330,17 +348,36 @@ export default function TrainerDashboard() {
     if (enrollment?.id) {
       await supabase.from("enrollments").update({ enrollment_status: "completed" }).eq("id", enrollment.id);
     }
-    const existingCertificate = await fetchRows("certificates", (query) => query.eq("student_id", studentId).eq("course_id", courseId));
-    if (!existingCertificate.length) {
-      await supabase.from("certificates").insert({
-        student_id: studentId,
-        course_id: courseId,
-        certificate_number: `CERT-${Date.now().toString().slice(-8)}`,
-        issue_date: new Date().toISOString().slice(0, 10),
-        status: "eligible",
-        issued_by: profile.id,
-      });
+  };
+
+  const issueCertificate = async (studentId, courseId) => {
+    setError("");
+    setMessage("");
+    const alreadyIssued = certificates.some((certificate) => String(certificate.student_id) === String(studentId) && String(certificate.course_id) === String(courseId));
+    if (alreadyIssued) {
+      setMessage("Certificate has already been issued for this course.");
+      return;
     }
+    const approval = certificateApprovals.find((item) => String(item.studentId) === String(studentId) && String(item.courseId) === String(courseId));
+    if (!approval?.ready) {
+      const remaining = `${approval?.pendingAssignments || 0} assignment${approval?.pendingAssignments === 1 ? "" : "s"} and ${approval?.pendingProjects || 0} project${approval?.pendingProjects === 1 ? "" : "s"}`;
+      setError(`Certificate cannot be issued yet. ${remaining} still need trainer approval.`);
+      return;
+    }
+    const { error: certificateError } = await supabase.from("certificates").insert({
+      student_id: studentId,
+      course_id: courseId,
+      certificate_number: `CERT-${Date.now().toString().slice(-8)}`,
+      issue_date: new Date().toISOString().slice(0, 10),
+      status: "issued",
+      issued_by: profile.id,
+    });
+    if (certificateError) {
+      setError(certificateError.message || "Unable to issue certificate.");
+      return;
+    }
+    setMessage("Certificate issued to the student.");
+    await loadDashboard();
   };
 
   const reviewSubmission = async (submission, status) => {
@@ -396,6 +433,7 @@ export default function TrainerDashboard() {
             <button type="button" onClick={() => openWorkspace("create-assignment")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "create-assignment" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Create assignment</button>
             <button type="button" onClick={() => openWorkspace("assign-project")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "assign-project" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Assign project</button>
             <button type="button" onClick={() => openWorkspace("add-videos")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "add-videos" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Video size={16} /> Add videos</button>
+            <button type="button" onClick={() => openWorkspace("certificate-approvals")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "certificate-approvals" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Award size={16} /> Certificates</button>
             <button type="button" onClick={() => openWorkspace("project-reviews")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "project-reviews" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Project reviews</button>
             <button type="button" onClick={() => openWorkspace("assignment-submissions")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "assignment-submissions" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Assignment submissions</button>
             <button type="button" onClick={handleLogout} className="inline-flex items-center gap-2 rounded-xl bg-cert-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-cert-green-dark">
@@ -536,6 +574,11 @@ export default function TrainerDashboard() {
             <header className="flex items-start justify-between gap-4 border-b border-cert-line bg-[linear-gradient(135deg,#f4fff8_0%,#e9f8ef_100%)] px-6 py-6"><div><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Video library</p><h2 className="mt-2 text-2xl font-semibold tracking-tight text-cert-ink">Posted course videos</h2><p className="mt-1 text-sm text-slate-500">Students can watch videos as soon as they become available.</p></div><span className="flex min-w-12 items-center justify-center rounded-2xl bg-white px-3 py-3 text-lg font-bold text-cert-green-dark ring-1 ring-cert-line">{courseVideos.length}</span></header>
             <div className="max-h-[42rem] space-y-4 overflow-y-auto p-5 sm:p-6">{courseVideos.length === 0 ? <div className="rounded-[1.35rem] border border-dashed border-cert-line bg-[linear-gradient(135deg,#f6fffa_0%,#edf8f2_100%)] px-6 py-12 text-center"><span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-cert-green-dark shadow-sm ring-1 ring-cert-line"><Video size={27} /></span><h3 className="mt-4 text-lg font-semibold text-cert-ink">No videos posted yet</h3><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500">Post the first course lesson to make it available to enrolled students.</p></div> : courseVideos.map((video) => <article key={video.id} className="rounded-2xl border border-cert-line bg-white p-4 shadow-[0_12px_28px_-24px_rgba(7,26,47,0.35)]"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold text-cert-ink">{video.title || "Course video"}</p><p className="mt-1 text-sm text-slate-600">{titleFor(courseById.get(String(video.course_id)), "Course")}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${videoIsActive(video) ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-700"}`}>{videoIsActive(video) ? "Live" : "Scheduled"}</span></div><div className="mt-4 flex items-center justify-between gap-3 border-t border-cert-line pt-3"><p className="text-xs text-slate-500">{formatVideoAvailability(video.available_at)}</p><a href={video.video_url} target="_blank" rel="noreferrer" className="text-sm font-semibold text-cert-green-dark underline">Open video</a></div></article>)}</div>
           </aside>
+        </section>}
+
+        {activeWorkspace === "certificate-approvals" && <section className="overflow-hidden rounded-[1.9rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
+          <header className="flex flex-wrap items-center justify-between gap-4 border-b border-cert-line bg-[linear-gradient(135deg,#f4fff8_0%,#e9f8ef_100%)] px-6 py-6"><div><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Certificate approvals</p><h2 className="mt-2 text-2xl font-semibold text-cert-ink">Issue student certificates</h2><p className="mt-1 text-sm text-slate-500">Approve and send a certificate for each enrolled student and course.</p></div><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-cert-green-dark ring-1 ring-cert-line"><Award size={23} /></span></header>
+          <div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-3">{certificateApprovals.length === 0 ? <p className="rounded-2xl bg-cert-mint p-5 text-sm text-slate-500">No enrolled students found.</p> : certificateApprovals.map((approval) => { const { enrollment, studentId, courseId, pendingAssignments, pendingProjects, ready } = approval; const student = studentById.get(String(studentId)); const course = courseById.get(String(courseId)); const issued = certificates.some((certificate) => String(certificate.student_id) === String(studentId) && String(certificate.course_id) === String(courseId)); return <article key={enrollment.id || `${studentId}-${courseId}`} className="rounded-2xl border border-cert-line bg-cert-mint/60 p-5"><p className="font-semibold text-cert-ink">{titleFor(student, "Student")}</p><p className="mt-1 text-sm text-slate-600">{titleFor(course, "Course")}</p>{!issued && !ready && <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">Waiting for {pendingAssignments} assignment{pendingAssignments === 1 ? "" : "s"} and {pendingProjects} project{pendingProjects === 1 ? "" : "s"} to be approved.</p>}<div className="mt-5 flex items-center justify-between gap-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${issued ? "bg-emerald-100 text-emerald-700" : ready ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-800"}`}>{issued ? "Issued" : ready ? "Ready to issue" : "Work pending"}</span>{issued ? <Award size={18} className="text-cert-green-dark" /> : <button type="button" disabled={!ready} onClick={() => issueCertificate(studentId, courseId)} className="rounded-xl bg-cert-green px-3 py-2 text-sm font-semibold text-cert-ink disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">Issue certificate</button>}</div></article>; })}</div>
         </section>}
 
         {(activeWorkspace === "assignment-submissions" || activeWorkspace === "project-reviews") && (

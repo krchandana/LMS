@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ArrowRight, Eye, EyeOff, ShieldCheck, Sparkles, Users, BookOpen } from "lucide-react";
+import { CheckCircle2, Eye, EyeOff, ShieldCheck, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -197,45 +197,38 @@ const TrainerLogin = () => {
 
   return (
     <div className="min-h-screen cert-bg-trainer px-4 py-8 sm:px-6 lg:px-8">
-      <div className="cert-glass-panel mx-auto grid min-h-[calc(100vh-4rem)] max-w-6xl overflow-hidden rounded-[2.5rem] shadow-[0_28px_90px_-45px_rgba(15,23,42,0.3)] lg:grid-cols-[1.05fr_0.95fr]">
-        <div className="relative overflow-hidden bg-[linear-gradient(180deg,_#f7fbf8_0%,_#eaf8f0_100%)] p-8 text-cert-ink sm:p-10 lg:p-12">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,_rgba(231,232,91,0.14),_transparent_32%),radial-gradient(circle_at_bottom_left,_rgba(49,201,111,0.16),_transparent_34%),radial-gradient(circle_at_20%_20%,_rgba(6,50,79,0.08),_transparent_28%)]" />
+      <div className="cert-glass-panel mx-auto grid max-w-6xl overflow-hidden rounded-[2.5rem] shadow-[0_28px_90px_-45px_rgba(15,23,42,0.3)] lg:min-h-[calc(100vh-4rem)] lg:grid-cols-[0.9fr_1.1fr]">
+        <aside className="relative hidden overflow-hidden bg-[radial-gradient(circle_at_14%_15%,rgba(49,201,111,0.24),transparent_27%),radial-gradient(circle_at_88%_83%,rgba(231,232,91,0.16),transparent_26%),linear-gradient(145deg,#041c30_0%,#063b50_58%,#08734f_130%)] p-8 text-white sm:p-10 lg:block lg:p-12">
+          <div className="absolute -right-24 top-20 h-64 w-64 rounded-full border border-white/10" />
+          <div className="absolute -bottom-28 -left-16 h-72 w-72 rounded-full border border-white/10" />
           <div className="relative flex h-full flex-col justify-between gap-8">
             <div>
-              <div className="inline-flex items-center gap-2 rounded-full bg-white px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-cert-green-dark ring-1 ring-cert-line">
+              <div className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.28em] text-cert-yellow backdrop-blur">
                 <Sparkles size={14} aria-hidden="true" />
                 Trainer Access
               </div>
-              <div className="mt-8 flex h-16 w-16 items-center justify-center rounded-3xl bg-white ring-1 ring-cert-line shadow-sm">
-                <ShieldCheck className="text-cert-green-dark" size={34} />
+              <div className="mt-9 flex h-16 w-16 items-center justify-center rounded-3xl bg-cert-green text-cert-ink shadow-lg shadow-black/20">
+                <ShieldCheck size={34} />
               </div>
-              <h1 className="mt-6 text-4xl font-semibold tracking-tight sm:text-5xl">Sign in to your trainer workspace</h1>
-              <p className="mt-4 max-w-xl text-base leading-7 text-slate-600">
-                Manage assigned students, project reviews, and submissions in one focused, easy-to-use dashboard.
-              </p>
+              <p className="mt-8 text-xs font-bold uppercase tracking-[0.25em] text-cert-yellow">Guide. Review. Celebrate.</p>
+              <h1 className="mt-4 max-w-md text-4xl font-semibold leading-tight tracking-tight sm:text-5xl">Help every learner move forward.</h1>
+              <p className="mt-5 max-w-md text-base leading-7 text-emerald-50/85">Your feedback turns completed work into confidence, progress, and achievement.</p>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
-              <div className="rounded-[1.5rem] bg-white p-4 ring-1 ring-cert-line">
-                <Users size={18} className="text-cert-green-dark" aria-hidden="true" />
-                <p className="mt-3 text-sm font-semibold">Students</p>
-                <p className="mt-1 text-sm text-slate-600">See your assigned learners clearly.</p>
-              </div>
-              <div className="rounded-[1.5rem] bg-white p-4 ring-1 ring-cert-line">
-                <BookOpen size={18} className="text-cert-green-dark" aria-hidden="true" />
-                <p className="mt-3 text-sm font-semibold">Projects</p>
-                <p className="mt-1 text-sm text-slate-600">Stay on top of course work.</p>
-              </div>
-              <div className="rounded-[1.5rem] bg-white p-4 ring-1 ring-cert-line">
-                <ArrowRight size={18} className="text-cert-green-dark" aria-hidden="true" />
-                <p className="mt-3 text-sm font-semibold">Fast access</p>
-                <p className="mt-1 text-sm text-slate-600">Enter the dashboard quickly.</p>
+            <div className="rounded-[1.5rem] border border-white/15 bg-white/10 p-5 backdrop-blur">
+              <p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-yellow">Your workspace</p>
+              <div className="mt-4 space-y-3 text-sm text-emerald-50/90">
+                {[
+                  "Create course assignments and projects",
+                  "Review student work with clear feedback",
+                  "Issue certificates when learning is complete",
+                ].map((item) => <p key={item} className="flex items-start gap-3"><CheckCircle2 size={18} className="mt-0.5 shrink-0 text-cert-green" />{item}</p>)}
               </div>
             </div>
           </div>
-        </div>
+        </aside>
 
-        <div className="flex items-center justify-center bg-white p-6 sm:p-10 lg:p-12">
+        <main className="flex min-h-[calc(100vh-4rem)] items-center justify-center bg-[radial-gradient(circle_at_88%_3%,rgba(49,201,111,0.12),transparent_27%),linear-gradient(180deg,#ffffff_0%,#f8fcf9_100%)] p-5 sm:p-10 lg:min-h-0 lg:p-12">
           <div className="w-full max-w-md rounded-[2rem] border border-cert-line bg-white p-8 shadow-[0_20px_60px_-35px_rgba(15,23,42,0.18)] sm:p-10">
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cert-green-dark">Welcome back</p>
             <h2 className="mt-3 text-3xl font-semibold tracking-tight text-cert-ink">Trainer login</h2>
@@ -302,7 +295,7 @@ const TrainerLogin = () => {
               </button>
             </form>
           </div>
-        </div>
+        </main>
       </div>
     </div>
   );

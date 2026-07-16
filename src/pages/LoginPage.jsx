@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Eye, EyeOff, GraduationCap, ShieldCheck, UsersRound } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import certisuredLoginHero from "../assets/certisured-login-hero.png";
 import { supabase } from "../lib/supabaseClient";
 
 const approvedStudentStatuses = ["active", "approved"];
@@ -635,32 +634,34 @@ const LoginPage = () => {
   ];
 
   return (
-    <div className="min-h-screen cert-bg-auth px-4 py-5 text-cert-ink sm:px-6 lg:px-8">
-      <div className="cert-glass-panel mx-auto grid min-h-[calc(100vh-2.5rem)] w-full max-w-6xl overflow-hidden rounded-[1.5rem] shadow-[0_24px_70px_-48px_rgba(7,26,47,0.5)] ring-1 ring-cert-line/70 lg:grid-cols-[0.9fr_1.1fr]">
-        <aside className="relative hidden min-h-full overflow-hidden bg-[#f7fbff] lg:block">
-          <img
-            src={certisuredLoginHero}
-            alt="Students, trainers, and administrators using the Certisured learning platform"
-            className="absolute inset-0 h-full w-full object-contain object-center"
-          />
-          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.18),rgba(255,255,255,0.04)_45%,rgba(6,34,57,0.1))]" />
-          <div className="relative h-full p-6 sm:p-8">
-            <div>
-              <div className="inline-flex items-center gap-3 rounded-2xl border border-white/80 bg-white/90 px-3 py-3 shadow-[0_18px_40px_-26px_rgba(7,26,47,0.35)] backdrop-blur" aria-label="Certisured Learning Management System">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cert-ink text-cert-green shadow-lg shadow-cert-ink/20">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_8%_8%,rgba(49,201,111,0.2),transparent_26%),radial-gradient(circle_at_92%_90%,rgba(231,232,91,0.22),transparent_24%),linear-gradient(135deg,#edf9f2_0%,#f6f9fc_52%,#e8f4ed_100%)] px-4 py-5 text-cert-ink sm:px-6 lg:px-8">
+      <div className="mx-auto grid min-h-[calc(100vh-2.5rem)] w-full max-w-7xl overflow-hidden rounded-[2rem] border border-white/80 bg-white shadow-[0_34px_90px_-52px_rgba(7,26,47,0.55)] lg:grid-cols-[0.95fr_1.05fr]">
+        <aside className="relative hidden min-h-full overflow-hidden bg-[radial-gradient(circle_at_12%_18%,rgba(49,201,111,0.24),transparent_28%),radial-gradient(circle_at_88%_78%,rgba(255,227,83,0.18),transparent_25%),linear-gradient(150deg,#041c30_0%,#06324f_55%,#075d4c_100%)] lg:block">
+          <div className="absolute -right-32 top-24 h-72 w-72 rounded-full border border-white/10" />
+          <div className="absolute -bottom-24 -left-16 h-72 w-72 rounded-full border border-white/10" />
+          <div className="relative flex h-full flex-col justify-between p-8 xl:p-10">
+            <div className="inline-flex w-fit items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-3 py-3 shadow-xl shadow-black/10 backdrop-blur" aria-label="Certisured Learning Management System">
+                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cert-green text-cert-ink shadow-lg shadow-black/20">
                   <ShieldCheck size={29} aria-hidden="true" />
                 </div>
                 <div>
-                  <p className="text-base font-bold uppercase tracking-[0.22em] text-cert-ink">Certisured</p>
-                  <p className="mt-1 text-xs font-medium uppercase tracking-[0.14em] text-cert-green-dark">Learning Management System</p>
+                  <p className="text-base font-bold uppercase tracking-[0.22em] text-white">Certisured</p>
+                  <p className="mt-1 text-xs font-medium uppercase tracking-[0.14em] text-emerald-50/80">Learning Management System</p>
                 </div>
-              </div>
+            </div>
+            <div className="max-w-md pb-6 text-white">
+              <p className="text-xs font-bold uppercase tracking-[0.25em] text-cert-yellow">Learn together</p>
+              <blockquote className="mt-5 border-l-2 border-cert-green pl-5 text-3xl font-semibold leading-tight tracking-tight xl:text-4xl">
+                “Students grow through every challenge; trainers turn that effort into confidence.”
+              </blockquote>
+              <p className="mt-5 max-w-sm text-base leading-7 text-emerald-50/80">Every lesson shared, task completed, and piece of feedback given moves learning forward.</p>
+              <p className="mt-7 text-sm font-semibold text-cert-yellow">— Certisured Learning Community</p>
             </div>
           </div>
         </aside>
 
-        <main className="flex items-center bg-[radial-gradient(circle_at_90%_0%,rgba(231,232,91,0.12),transparent_28%),linear-gradient(180deg,#ffffff_0%,#f7fcf8_100%)] px-5 py-8 sm:px-8 lg:px-12">
-          <div className="mx-auto w-full max-w-xl">
+        <main className="flex items-center bg-[radial-gradient(circle_at_92%_4%,rgba(49,201,111,0.12),transparent_24%),linear-gradient(180deg,#ffffff_0%,#f8fcf9_100%)] px-5 py-8 sm:px-10 lg:px-14">
+          <div className="mx-auto w-full max-w-lg">
             <div className="mb-8 lg:hidden">
               <div className="inline-flex items-center gap-3" aria-label="Certisured Learning Management System">
                 <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cert-navy text-cert-green">
@@ -675,8 +676,11 @@ const LoginPage = () => {
             </div>
 
             <div>
-              <p className="text-sm font-semibold uppercase tracking-[0.18em] text-cert-green-dark">Select role</p>
-              <div className="mt-4 grid grid-cols-3 gap-2 rounded-2xl border border-cert-line bg-cert-mint/80 p-1.5">
+              <p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Secure sign in</p>
+              <h1 className="mt-3 text-3xl font-semibold tracking-tight text-cert-ink sm:text-4xl">Welcome to your workspace</h1>
+              <p className="mt-3 text-sm leading-6 text-slate-500">Choose your role to access the tools designed for you.</p>
+              <p className="mt-7 text-xs font-bold uppercase tracking-[0.2em] text-cert-green-dark">Select role</p>
+              <div className="mt-3 grid grid-cols-3 gap-2 rounded-2xl border border-cert-line bg-cert-mint/70 p-1.5">
                 {roleOptions.map(({ id, label, icon: Icon }) => (
                   <button
                     key={id}
@@ -699,7 +703,7 @@ const LoginPage = () => {
               </div>
             </div>
 
-            <section className="mt-7 rounded-[1.25rem] border border-slate-200 bg-white p-5 shadow-[0_20px_55px_-44px_rgba(15,23,42,0.38)] sm:p-7">
+            <section className="mt-7 rounded-[1.5rem] border border-slate-200/90 bg-white p-5 shadow-[0_24px_60px_-44px_rgba(15,23,42,0.26)] sm:p-7">
               <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">{role} login</p>
               <h2 className="mt-3 text-3xl font-semibold tracking-tight text-cert-ink">
                 {role === "student" && studentMode === "register" ? "Register for approval" : role === "student" && studentMode === "reset" ? "Reset student password" : "Sign in to your account"}
