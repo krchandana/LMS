@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Award, Bell, BookOpenCheck, CheckCircle2, Download, FolderGit2, HardDriveUpload, LogOut, Play, ShieldCheck, Sparkles, Target, Video, X } from "lucide-react";
+import { Award, Bell, CheckCircle2, Download, FolderGit2, HardDriveUpload, LogOut, Play, ShieldCheck, Sparkles, Target, Video, X } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
@@ -125,6 +125,36 @@ const fetchProfilesWithServiceRole = async (ids) => {
   return Array.isArray(rows) ? rows : [];
 };
 
+const updateSubmissionForResubmission = async (submissionId, payload) => {
+  const { data, error } = await supabase.from("submissions").update(payload).eq("id", submissionId).select();
+  const updatedSubmission = Array.isArray(data) ? data[0] : data;
+  if (!error && updatedSubmission) return { data: updatedSubmission, error: null };
+
+  if (!hasServiceRoleKey) {
+    return { data: null, error: error || { message: "Unable to find the previous submission to update." } };
+  }
+
+  try {
+    const response = await fetch(`${supabaseUrl}/rest/v1/submissions?id=eq.${encodeURIComponent(submissionId)}`, {
+      method: "PATCH",
+      headers: {
+        apikey: serviceRoleKey,
+        Authorization: `Bearer ${serviceRoleKey}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(payload),
+    });
+    const responseData = await response.json().catch(() => null);
+    const serviceSubmission = Array.isArray(responseData) ? responseData[0] : responseData;
+    return response.ok && serviceSubmission
+      ? { data: serviceSubmission, error: null }
+      : { data: null, error: { message: responseData?.message || error?.message || "Unable to update the previous submission." } };
+  } catch {
+    return { data: null, error: error || { message: "Unable to update the previous submission." } };
+  }
+};
+
 const insertWithColumnFallback = async (table, payload) => {
   let nextPayload = { ...payload };
 
@@ -153,11 +183,13 @@ export default function StudentDashboard() {
   const [loading, setLoading] = useState(true);
   const [studentRecord, setStudentRecord] = useState(null);
   const [courses, setCourses] = useState([]);
+  const [courseVideos, setCourseVideos] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [certificates, setCertificates] = useState([]);
   const [submissionTask, setSubmissionTask] = useState(null);
-  const [workFile, setWorkFile] = useState(null);
+  const [workFiles, setWorkFiles] = useState([]);
+  const [workSource, setWorkSource] = useState("");
   const [workNotes, setWorkNotes] = useState("");
   const [submitError, setSubmitError] = useState("");
   const [submitSuccess, setSubmitSuccess] = useState("");
@@ -166,8 +198,11 @@ export default function StudentDashboard() {
   const [activeTaskView, setActiveTaskView] = useState("assignment");
   const [activePanel, setActivePanel] = useState("courses");
   const [taskStatusFilter, setTaskStatusFilter] = useState("");
+  const [taskCourseFilter, setTaskCourseFilter] = useState("");
   const [selectedCourseId, setSelectedCourseId] = useState("");
   const fileInputRef = useRef(null);
+  const driveFolderInputRef = useRef(null);
+  const githubFolderInputRef = useRef(null);
 
   useEffect(() => {
     if (!profile || !user) return;
@@ -190,7 +225,18 @@ export default function StudentDashboard() {
         trainer_id: profile.trainer_id,
         course_id: profile.course_id,
       };
-      const studentIds = [student.id, student.profile_id, student.user_id, profile.id].filter(Boolean);
+      const studentIds = [...new Set([
+        student.id,
+        student.profile_id,
+        student.user_id,
+        student.student_id,
+        student.student_login_id,
+        profile.id,
+        profile.profile_id,
+        profile.user_id,
+        profile.student_id,
+        profile.student_login_id,
+      ].filter(Boolean))];
       const trainerId = student.trainer_id || profile.trainer_id;
       const directCourseIds = [student.course_id, student.course, profile.course_id].filter(Boolean);
 
@@ -258,18 +304,53 @@ export default function StudentDashboard() {
       });
 
       const courseIds = courseRowsWithTrainer.map((course) => course.id || course.course_id).filter(Boolean);
-      const projectRows = await firstWorkingList("projects", [
-        (query) => query.in("student_id", studentIds),
-        (query) => query.in("profile_id", studentIds),
-        (query) => query.in("course_id", courseIds),
-        (query) => query.eq("trainer_id", trainerId),
+      const courseVideoRows = courseIds.length
+        ? await firstWorkingList("course_videos", [
+            (query) => query.in("course_id", courseIds).order("available_at", { ascending: false }),
+            (query) => query.in("course_id", courseIds).order("created_at", { ascending: false }),
+          ])
+        : emptyData;
+      const serviceProjectRows = courseIds.length
+        ? await fetchRowsWithServiceRole("projects", { course_id: `in.(${courseIds.join(",")})` })
+        : emptyData;
+      const [studentProjectRows, courseProjectRows] = await Promise.all([
+        firstWorkingList("projects", [
+          (query) => query.in("student_id", studentIds),
+          (query) => query.in("profile_id", studentIds),
+        ]),
+        courseIds.length
+          ? firstWorkingList("projects", [(query) => query.in("course_id", courseIds)])
+          : Promise.resolve(emptyData),
       ]);
-      const assignmentRows = await firstWorkingList("assignments", [
-        (query) => query.in("student_id", studentIds),
-        (query) => query.in("profile_id", studentIds),
-        (query) => query.in("course_id", courseIds),
-        (query) => query.eq("trainer_id", trainerId),
+      const studentIdKeys = new Set(studentIds.map(String));
+      const courseIdKeys = new Set(courseIds.map(String));
+      const projectRows = (serviceProjectRows.length ? serviceProjectRows : [...studentProjectRows, ...courseProjectRows])
+        .filter((project) => {
+          const projectCourseId = project.course_id || project.course;
+          const projectStudentId = project.student_id || project.profile_id;
+          return courseIdKeys.has(String(projectCourseId)) && studentIdKeys.has(String(projectStudentId));
+        })
+        .filter((project, index, rows) => rows.findIndex((row) => String(row.id) === String(project.id)) === index);
+      const serviceAssignmentRows = courseIds.length
+        ? await fetchRowsWithServiceRole("assignments", { course_id: `in.(${courseIds.join(",")})` })
+        : emptyData;
+      const [studentAssignmentRows, courseAssignmentRows] = await Promise.all([
+        firstWorkingList("assignments", [
+          (query) => query.in("student_id", studentIds),
+          (query) => query.in("profile_id", studentIds),
+        ]),
+        courseIds.length
+          ? firstWorkingList("assignments", [(query) => query.in("course_id", courseIds)])
+          : Promise.resolve(emptyData),
       ]);
+      const assignmentRows = (serviceAssignmentRows.length ? serviceAssignmentRows : [...studentAssignmentRows, ...courseAssignmentRows])
+        .filter((assignment) => {
+          const assignmentCourseId = assignment.course_id || assignment.course;
+          const assignmentStudentId = assignment.student_id || assignment.profile_id;
+          return courseIdKeys.has(String(assignmentCourseId))
+            && (!assignmentStudentId || studentIdKeys.has(String(assignmentStudentId)));
+        })
+        .filter((assignment, index, rows) => rows.findIndex((row) => String(row.id) === String(assignment.id)) === index);
       const taskRows = [
         ...assignmentRows.map((task) => ({ ...task, task_type: "assignment" })),
         ...projectRows.map((task) => ({ ...task, task_type: "project" })),
@@ -288,6 +369,7 @@ export default function StudentDashboard() {
 
       setStudentRecord(student);
       setCourses(courseRowsWithTrainer);
+      setCourseVideos(courseVideoRows);
       setTasks(taskRows);
       setSubmissions(submissionRows);
       setCertificates(certificateRows);
@@ -323,11 +405,18 @@ export default function StudentDashboard() {
   const baseTasks = activePanel === "task-status"
     ? taskSummaries
     : activeTaskView === "project" ? projectTasks : assignmentTasks;
-  const visibleTasks = taskStatusFilter
-    ? baseTasks.filter((task) => task.status === taskStatusFilter)
+  const courseScopedTasks = taskCourseFilter
+    ? baseTasks.filter((task) => String(task.course_id || task.course || "") === taskCourseFilter)
     : baseTasks;
+  const visibleTasks = taskStatusFilter
+    ? courseScopedTasks.filter((task) => task.status === taskStatusFilter)
+    : courseScopedTasks;
+  const courseById = useMemo(
+    () => new Map(courses.map((course) => [String(course.id || course.course_id), course])),
+    [courses]
+  );
 
-  const stats = useMemo(() => {
+  const taskStats = useMemo(() => {
     const totalTasks = taskSummaries.length;
     const counts = taskSummaries.reduce(
       (acc, task) => {
@@ -347,19 +436,59 @@ export default function StudentDashboard() {
     () => courses.find((course) => String(course.id || course.course_id) === selectedCourseId) || courses[0] || null,
     [courses, selectedCourseId]
   );
+  const courseStats = useMemo(() => {
+    const selectedCourseKey = String(selectedCourse?.id || selectedCourse?.course_id || "");
+    const courseTasks = taskSummaries.filter((task) => String(task.course_id || task.course || "") === selectedCourseKey);
+    const counts = courseTasks.reduce(
+      (acc, task) => {
+        acc[task.status] = (acc[task.status] || 0) + 1;
+        return acc;
+      },
+      { pending: 0, submitted: 0, approved: 0, rejected: 0 }
+    );
+    const approved = counts.approved || 0;
+    const totalTasks = courseTasks.length;
+    return {
+      totalTasks,
+      counts,
+      approved,
+      progress: totalTasks ? Math.round((approved / totalTasks) * 100) : 0,
+      eligible: totalTasks > 0 && approved === totalTasks,
+    };
+  }, [selectedCourse, taskSummaries]);
   const selectedCourseCertificate = useMemo(() => {
     const selectedCourseKey = String(selectedCourse?.id || selectedCourse?.course_id || "");
     return certificates.find((certificate) => String(certificate.course_id || certificate.course || "") === selectedCourseKey) || null;
   }, [certificates, selectedCourse]);
-  const selectedCourseVideo = courseVideoUrl(selectedCourse);
+  const selectedCourseVideoRecord = useMemo(() => {
+    const selectedCourseKey = String(selectedCourse?.id || selectedCourse?.course_id || "");
+    const now = Date.now();
+    return courseVideos
+      .filter((video) => {
+        const isForSelectedCourse = String(video.course_id) === selectedCourseKey;
+        const availableAt = video.available_at ? new Date(video.available_at).getTime() : 0;
+        return isForSelectedCourse && !Number.isNaN(availableAt) && availableAt <= now;
+      })
+      .sort((first, second) => String(second.available_at || second.created_at || "").localeCompare(String(first.available_at || first.created_at || "")))[0] || null;
+  }, [courseVideos, selectedCourse]);
+  const selectedCourseVideo = selectedCourseVideoRecord?.video_url || courseVideoUrl(selectedCourse);
   const selectedCourseEmbed = videoEmbedUrl(selectedCourseVideo);
 
   const openSubmitForm = (task) => {
     setSubmissionTask(task);
-    setWorkFile(null);
+    setWorkFiles([]);
+    setWorkSource("");
     setWorkNotes("");
     setSubmitError("");
     setSubmitSuccess("");
+    setShowWorkSourcePicker(false);
+  };
+
+  const selectWorkFiles = (files, source) => {
+    const selectedFiles = Array.from(files || []);
+    if (!selectedFiles.length) return;
+    setWorkFiles(selectedFiles);
+    setWorkSource(source);
     setShowWorkSourcePicker(false);
   };
 
@@ -412,7 +541,7 @@ export default function StudentDashboard() {
       return;
     }
 
-    if (!workFile && !workNotes.trim()) {
+    if (!workFiles.length && !workNotes.trim()) {
       setSubmitError("Choose a completed-work file or add notes before submitting.");
       return;
     }
@@ -420,21 +549,47 @@ export default function StudentDashboard() {
     setIsSubmitting(true);
 
     let uploadedWorkUrl = null;
-    if (workFile) {
-      const safeFileName = workFile.name.replace(/[^a-zA-Z0-9._-]/g, "-");
-      const filePath = `${user?.id || profile.id}/${Date.now()}-${safeFileName}`;
-      const { error: uploadError } = await supabase.storage
-        .from("student-work")
-        .upload(filePath, workFile, { upsert: false });
+    if (workFiles.length) {
+      const uploadFolder = `${user?.id || profile.id}/${Date.now()}`;
+      const uploadedFiles = [];
 
-      if (uploadError) {
-        setIsSubmitting(false);
-        setSubmitError(uploadError.message || "Unable to upload the selected file.");
-        return;
+      for (const workFile of workFiles) {
+        const relativePath = (workFile.webkitRelativePath || workFile.name)
+          .split("/")
+          .map((segment) => segment.replace(/[^a-zA-Z0-9._-]/g, "-") || "file")
+          .join("/");
+        const filePath = `${uploadFolder}/${relativePath}`;
+        const { error: uploadError } = await supabase.storage
+          .from("student-work")
+          .upload(filePath, workFile, { upsert: false });
+
+        if (uploadError) {
+          setIsSubmitting(false);
+          setSubmitError(uploadError.message || "Unable to upload the selected file.");
+          return;
+        }
+
+        const { data: publicUrl } = supabase.storage.from("student-work").getPublicUrl(filePath);
+        uploadedFiles.push({ name: workFile.webkitRelativePath || workFile.name, url: publicUrl.publicUrl });
       }
 
-      const { data: publicUrl } = supabase.storage.from("student-work").getPublicUrl(filePath);
-      uploadedWorkUrl = publicUrl.publicUrl;
+      if (uploadedFiles.length === 1) {
+        uploadedWorkUrl = uploadedFiles[0].url;
+      } else {
+        const fileLinks = uploadedFiles
+          .map(({ name, url }) => `<li><a href="${url}">${name.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</a></li>`)
+          .join("");
+        const packageFile = new Blob([`<!doctype html><title>Submitted work</title><h1>Submitted work</h1><p>${workSource || "Selected folder"}</p><ul>${fileLinks}</ul>`], { type: "text/html" });
+        const packagePath = `${uploadFolder}/submission-files.html`;
+        const { error: packageError } = await supabase.storage.from("student-work").upload(packagePath, packageFile, { contentType: "text/html", upsert: false });
+        if (packageError) {
+          setIsSubmitting(false);
+          setSubmitError(packageError.message || "Unable to create the submitted-work package.");
+          return;
+        }
+        const { data: packageUrl } = supabase.storage.from("student-work").getPublicUrl(packagePath);
+        uploadedWorkUrl = packageUrl.publicUrl;
+      }
     }
 
     const isProject = submissionTask.task_type === "project";
@@ -454,9 +609,14 @@ export default function StudentDashboard() {
           submitted_at: new Date().toISOString(),
         };
 
+    const previousSubmission = isProject
+      ? null
+      : submissionTask.submission || submissions.find((submission) => String(submission.assignment_id) === String(submissionTask.taskId));
     const result = isProject
       ? await supabase.from("projects").update(payload).eq("id", submissionTask.taskId).select().single()
-      : await insertWithColumnFallback("submissions", payload);
+      : previousSubmission?.id
+        ? await updateSubmissionForResubmission(previousSubmission.id, payload)
+        : await insertWithColumnFallback("submissions", payload);
     const { data, error } = result;
     setIsSubmitting(false);
 
@@ -468,12 +628,15 @@ export default function StudentDashboard() {
     if (isProject) {
       setTasks((prev) => prev.map((task) => (task.id === data.id ? { ...task, ...data } : task)));
     } else {
-      setSubmissions((prev) => [data, ...prev]);
+      setSubmissions((prev) => previousSubmission?.id
+        ? prev.map((submission) => (submission.id === previousSubmission.id ? { ...submission, ...data } : submission))
+        : [data, ...prev]);
     }
     setSubmissionTask(null);
-    setWorkFile(null);
+    setWorkFiles([]);
+    setWorkSource("");
     setWorkNotes("");
-    setSubmitSuccess("Work submitted successfully.");
+    setSubmitSuccess(previousSubmission?.id ? "Revision submitted successfully." : "Work submitted successfully.");
   };
 
   const renderCourse = (course) => {
@@ -484,9 +647,11 @@ export default function StudentDashboard() {
     <div key={courseId} className={`overflow-hidden rounded-2xl border bg-white shadow-[0_14px_40px_-30px_rgba(15,23,42,0.28)] transition hover:-translate-y-0.5 hover:shadow-[0_20px_48px_-30px_rgba(15,23,42,0.24)] ${isSelected ? "border-cert-green ring-2 ring-cert-green/20" : "border-slate-200"}`}>
       <div className="grid sm:grid-cols-[9.5rem_minmax(0,1fr)]">
         <div className="relative flex min-h-36 flex-col justify-between overflow-hidden bg-[radial-gradient(circle_at_78%_22%,rgba(49,201,111,0.62),transparent_30%),linear-gradient(145deg,#071a2f,#0a3d45_55%,#0b5943)] p-4 text-white">
-          <span className="w-fit rounded-full bg-white/15 px-2.5 py-1 text-[0.62rem] font-semibold uppercase tracking-[0.16em]">Certisured</span>
+          <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-white/15 bg-white/10 px-2 py-1 text-[0.6rem] font-bold uppercase tracking-[0.13em] text-white/95" aria-label="Certisured">
+            <span className="flex h-4 w-4 items-center justify-center rounded-md bg-cert-green text-cert-ink"><ShieldCheck size={11} strokeWidth={3} aria-hidden="true" /></span>
+            Certisured
+          </span>
           <div>
-            <BookOpenCheck size={27} className="mb-2 text-[#55e49b]" aria-hidden="true" />
             <p className="text-sm font-bold leading-tight">{titleFor(course, "Course")}</p>
           </div>
         </div>
@@ -521,31 +686,25 @@ export default function StudentDashboard() {
     );
   };
 
-  const renderTask = (task) => (
-    <div key={`${task.task_type}-${task.taskId || titleFor(task)}`} className="rounded-[1.75rem] border border-cert-line bg-white p-5 shadow-[0_14px_40px_-30px_rgba(15,23,42,0.28)] transition hover:-translate-y-0.5 hover:shadow-[0_18px_48px_-32px_rgba(15,23,42,0.2)]">
-      <div className={`mb-4 h-1.5 rounded-full bg-gradient-to-r ${task.status === "approved" ? "from-emerald-400 via-green-500 to-teal-500" : "from-sky-400 via-cyan-400 to-indigo-400"}`} />
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="font-semibold text-cert-ink">{titleFor(task, "Task")}</p>
-          <p className="mt-2 text-sm capitalize text-slate-500">{task.task_type}</p>
-          {task.description && <p className="mt-2 text-sm leading-6 text-slate-500">{task.description}</p>}
-          {task.due_date && <p className="mt-2 text-sm text-slate-500">Due: {task.due_date}</p>}
+  const renderTask = (task) => {
+    const isSubmitted = task.status === "submitted";
+    const isApproved = task.status === "approved";
+    const canSubmit = !isSubmitted && !isApproved;
+    const course = courseById.get(String(task.course_id || task.course || ""));
+    return (
+      <article key={`${task.task_type}-${task.taskId || titleFor(task)}`} className="group relative overflow-hidden rounded-[1.4rem] border border-slate-200 bg-white shadow-[0_14px_34px_-30px_rgba(7,26,47,0.35)] transition duration-200 hover:-translate-y-0.5 hover:border-cert-green/50 hover:shadow-[0_18px_40px_-28px_rgba(7,26,47,0.32)]">
+        <div className={`absolute inset-y-0 left-0 w-1 ${isApproved ? "bg-emerald-500" : isSubmitted ? "bg-sky-400" : "bg-cert-green"}`} />
+        <div className="p-5 pl-6">
+          <div className="flex items-start gap-3">
+            <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${isApproved ? "bg-emerald-50 text-emerald-600" : isSubmitted ? "bg-sky-50 text-sky-600" : "bg-cert-mint text-cert-green-dark"}`}><Target size={19} aria-hidden="true" /></span>
+            <div className="min-w-0 flex-1"><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold leading-6 text-cert-ink">{titleFor(task, "Task")}</h3><p className="mt-1 text-xs font-medium text-slate-500">{titleFor(course, "Course")}</p></div><span className={`rounded-full px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] ${statusStyles[task.status] || (task.status === "active" ? "bg-sky-100 text-sky-700" : "bg-slate-200 text-slate-700")}`}>{task.status === "active" ? "To do" : task.status}</span></div></div>
+          </div>
+          {task.description && <p className="mt-4 line-clamp-2 text-sm leading-6 text-slate-600">{task.description}</p>}
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3"><p className="text-xs font-medium text-slate-500">{task.due_date ? <>Due <span className="font-semibold text-cert-ink">{task.due_date}</span></> : "No due date"}</p>{canSubmit && <button type="button" onClick={() => openSubmitForm(task)} className="rounded-xl bg-cert-green px-4 py-2 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">{task.status === "rejected" ? "Submit revision" : "Submit work"}</button>}{isSubmitted && <p className="text-xs font-semibold text-sky-700">Waiting for review</p>}{isApproved && <p className="text-xs font-semibold text-emerald-700">Completed</p>}</div>
         </div>
-        <span className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${statusStyles[task.status] || "bg-slate-200 text-slate-700"}`}>
-          {task.status}
-        </span>
-      </div>
-      {task.status !== "approved" && (
-        <button
-          type="button"
-          onClick={() => openSubmitForm(task)}
-          className="mt-4 rounded-3xl bg-cert-green px-4 py-2 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white"
-        >
-          Submit Work
-        </button>
-      )}
-    </div>
-  );
+      </article>
+    );
+  };
 
   if (!profile) return <div className="p-6 text-slate-700">Loading student profile...</div>;
 
@@ -583,10 +742,10 @@ export default function StudentDashboard() {
             <span>Projects</span><span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{projectTasks.length}</span>
           </button>
           {[
-            ["Pending", stats.counts.pending || 0, "pending"],
-            ["Submitted", stats.counts.submitted || 0, "submitted"],
-            ["Approved", stats.counts.approved || 0, "approved"],
-            ["Rejected", stats.counts.rejected || 0, "rejected"],
+            ["Pending", taskStats.counts.pending || 0, "pending"],
+            ["Submitted", taskStats.counts.submitted || 0, "submitted"],
+            ["Approved", taskStats.counts.approved || 0, "approved"],
+            ["Rejected", taskStats.counts.rejected || 0, "rejected"],
           ].map(([label, value, status]) => (
             <button key={label} type="button" onClick={() => openPanel("task-status", { status })} className={`inline-flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${activePanel === "task-status" && taskStatusFilter === status ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/75 hover:bg-white/10"}`}>
               <span>{label}</span>
@@ -594,7 +753,7 @@ export default function StudentDashboard() {
             </button>
           ))}
           <button type="button" onClick={() => openPanel("certificate")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "certificate" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
-            <span>Certificate</span><span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{stats.eligible ? "Eligible" : "Not yet"}</span>
+            <span>Certificate</span><span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{courseStats.eligible ? "Eligible" : "Not yet"}</span>
           </button>
           <button type="button" onClick={handleLogout} className="mt-auto inline-flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/20">
             <LogOut size={16} aria-hidden="true" />
@@ -603,10 +762,10 @@ export default function StudentDashboard() {
         </div>
       </nav>
       <div className="space-y-6 p-4 sm:p-6 lg:ml-60 lg:p-8">
-      <header className="flex items-center justify-end gap-4 rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_12px_30px_-24px_rgba(15,23,42,0.24)]">
+      {activePanel === "courses" && <header className="flex items-center justify-end gap-4 rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_12px_30px_-24px_rgba(15,23,42,0.24)]">
         <div className="flex items-center gap-3"><Bell size={19} className="hidden text-slate-500 sm:block" aria-hidden="true" /><span className="hidden text-sm font-medium text-slate-600 sm:block">{profile.full_name || "Student"}</span><span className="flex h-9 w-9 items-center justify-center rounded-full bg-cert-mint font-semibold text-cert-green-dark">{(profile.full_name || "S").charAt(0).toUpperCase()}</span></div>
-      </header>
-      <section className="grid gap-5 rounded-2xl border border-slate-100 bg-white p-6 shadow-[0_16px_38px_-30px_rgba(15,23,42,0.3)] xl:grid-cols-[minmax(0,1fr)_15rem] xl:items-center">
+      </header>}
+      {activePanel === "courses" && <section className="grid gap-5 rounded-2xl border border-slate-100 bg-white p-6 shadow-[0_16px_38px_-30px_rgba(15,23,42,0.3)] xl:grid-cols-[minmax(0,1fr)_15rem] xl:items-center">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-cert-green-dark">Student dashboard</p>
           <h1 className="mt-2 text-3xl font-bold tracking-tight sm:text-4xl">Welcome back, {profile.full_name || "Student"}</h1>
@@ -614,10 +773,10 @@ export default function StudentDashboard() {
         </div>
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-2xl bg-cert-mint p-3 text-center"><p className="text-2xl font-bold text-cert-green-dark">{courses.length}</p><p className="mt-1 text-[0.65rem] font-semibold text-slate-500">COURSES</p></div>
-          <div className="rounded-2xl bg-[#effaf0] p-3 text-center"><p className="text-2xl font-bold text-[#2aa85d]">{taskSummaries.length}</p><p className="mt-1 text-[0.65rem] font-semibold text-slate-500">TASKS</p></div>
-          <div className="rounded-2xl bg-[#fff7e9] p-3 text-center"><p className="text-2xl font-bold text-[#e59a14]">{stats.progress}%</p><p className="mt-1 text-[0.65rem] font-semibold text-slate-500">PROGRESS</p></div>
+          <div className="rounded-2xl bg-[#effaf0] p-3 text-center"><p className="text-2xl font-bold text-[#2aa85d]">{courseStats.totalTasks}</p><p className="mt-1 text-[0.65rem] font-semibold text-slate-500">COURSE TASKS</p></div>
+          <div className="rounded-2xl bg-[#fff7e9] p-3 text-center"><p className="text-2xl font-bold text-[#e59a14]">{courseStats.progress}%</p><p className="mt-1 text-[0.65rem] font-semibold text-slate-500">PROGRESS</p></div>
         </div>
-      </section>
+      </section>}
       <section className="hidden cert-glass-panel overflow-hidden rounded-[2.5rem] px-8 py-8 text-cert-ink shadow-[0_28px_80px_-40px_rgba(15,23,42,0.18)]">
         <div className="grid gap-8 xl:grid-cols-[1.1fr_0.9fr] xl:items-center">
           <div>
@@ -641,29 +800,28 @@ export default function StudentDashboard() {
           <div className="grid gap-4 rounded-[2rem] bg-cert-mint p-5 ring-1 ring-cert-line sm:grid-cols-2 xl:grid-cols-1">
             <div className="rounded-[1.5rem] bg-white p-4 ring-1 ring-cert-line">
               <p className="text-xs uppercase tracking-[0.28em] text-cert-green-dark">Completion</p>
-              <p className="mt-3 text-3xl font-semibold text-cert-ink">{stats.progress}%</p>
+              <p className="mt-3 text-3xl font-semibold text-cert-ink">{courseStats.progress}%</p>
               <p className="mt-2 text-sm text-slate-600">Live progress based on approved tasks.</p>
             </div>
             <div className="rounded-[1.5rem] bg-white p-4 ring-1 ring-cert-line">
               <p className="text-xs uppercase tracking-[0.28em] text-cert-green-dark">Readiness</p>
-              <p className="mt-3 text-lg font-semibold text-cert-ink">{stats.eligible ? "Certificate eligible" : "In progress"}</p>
-              <p className="mt-2 text-sm text-slate-600">{stats.approved} approved out of {stats.totalTasks} tasks.</p>
+              <p className="mt-3 text-lg font-semibold text-cert-ink">{courseStats.eligible ? "Certificate eligible" : "In progress"}</p>
+              <p className="mt-2 text-sm text-slate-600">{courseStats.approved} approved out of {courseStats.totalTasks} tasks.</p>
             </div>
             <div className="sm:col-span-2 xl:col-span-1 grid gap-3 sm:grid-cols-3 xl:grid-cols-1">
               <div className="rounded-[1.25rem] bg-white p-4 ring-1 ring-cert-line">
-                <BookOpenCheck size={18} className="text-cert-green-dark" aria-hidden="true" />
                 <p className="mt-3 text-sm font-semibold text-cert-ink">Courses</p>
                 <p className="mt-1 text-sm text-slate-500">{courses.length} active view</p>
               </div>
               <div className="rounded-[1.25rem] bg-white p-4 ring-1 ring-cert-line">
                 <Target size={18} className="text-cert-green-dark" aria-hidden="true" />
                 <p className="mt-3 text-sm font-semibold text-cert-ink">Tasks</p>
-                <p className="mt-1 text-sm text-slate-500">{taskSummaries.length} tracked</p>
+                <p className="mt-1 text-sm text-slate-500">{courseStats.totalTasks} in this course</p>
               </div>
               <div className="rounded-[1.25rem] bg-white p-4 ring-1 ring-cert-line">
                 <CheckCircle2 size={18} className="text-cert-green-dark" aria-hidden="true" />
                 <p className="mt-3 text-sm font-semibold text-cert-ink">Submitted</p>
-                <p className="mt-1 text-sm text-slate-500">{stats.counts.submitted || 0} pending review</p>
+                <p className="mt-1 text-sm text-slate-500">{courseStats.counts.submitted || 0} pending review</p>
               </div>
             </div>
           </div>
@@ -684,7 +842,7 @@ export default function StudentDashboard() {
             <div className="flex items-start justify-between gap-4">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.24em] text-cert-green-dark">Course video</p>
-                <h2 className="mt-2 text-xl font-semibold text-cert-ink">{selectedCourse ? titleFor(selectedCourse, "Course introduction") : "Course introduction"}</h2>
+                <h2 className="mt-2 text-xl font-semibold text-cert-ink">{selectedCourseVideoRecord?.title || (selectedCourse ? titleFor(selectedCourse, "Course introduction") : "Course introduction")}</h2>
               </div>
               <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-cert-green/15 text-cert-green-dark">
                 <Video size={21} aria-hidden="true" />
@@ -697,7 +855,7 @@ export default function StudentDashboard() {
                 <iframe
                   className="h-full w-full"
                   src={selectedCourseEmbed}
-                  title={`${titleFor(selectedCourse, "Course")} video`}
+                  title={selectedCourseVideoRecord?.title || `${titleFor(selectedCourse, "Course")} video`}
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                   allowFullScreen
                 />
@@ -726,27 +884,26 @@ export default function StudentDashboard() {
           </aside>
         </div>
 
-        <div id="student-tasks" className={`grid gap-6 xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)] ${(activePanel === "assignments" || activePanel === "projects" || activePanel === "task-status") ? "" : "hidden"}`}>
-          <section className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-            <div>
-              <h2 className="text-xl font-semibold text-cert-ink">{activePanel === "task-status" ? `${taskStatusFilter.charAt(0).toUpperCase()}${taskStatusFilter.slice(1)} tasks` : activeTaskView === "assignment" ? "Assignments" : "Projects"}</h2>
-              <p className="mt-2 text-sm text-slate-500">Choose a task to submit your completed work.</p>
-            </div>
-            <div className="mt-6 space-y-4">
-              {visibleTasks.length === 0 ? <div className="rounded-3xl bg-cert-mint p-5 text-sm text-slate-500">{activeTaskView === "assignment" ? "No assignments found." : "No projects found."}</div> : visibleTasks.map(renderTask)}
+        <div id="student-tasks" className={`grid gap-6 ${activePanel === "task-status" && taskStatusFilter === "approved" ? "" : "xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]"} ${(activePanel === "assignments" || activePanel === "projects" || activePanel === "task-status") ? "" : "hidden"}`}>
+          <section className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.15)]">
+            <header className="border-b border-cert-line bg-[linear-gradient(135deg,#ffffff_0%,#f2fcf6_100%)] px-5 py-5 sm:px-6">
+              <div className="flex flex-wrap items-center justify-between gap-4"><div className="flex items-center gap-3"><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-cert-green/15 text-cert-green-dark"><Target size={22} aria-hidden="true" /></span><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Course work</p><h2 className="mt-1 text-2xl font-semibold text-cert-ink">{activePanel === "task-status" ? `${taskStatusFilter.charAt(0).toUpperCase()}${taskStatusFilter.slice(1)} tasks` : activeTaskView === "assignment" ? "Assignments" : "Projects"}</h2></div></div><div className="flex items-center gap-3"><label className="grid gap-1 text-xs font-semibold text-slate-500"><span>Show course</span><select value={taskCourseFilter} onChange={(event) => setTaskCourseFilter(event.target.value)} className="min-w-40 rounded-xl border border-cert-line bg-white px-3 py-2 text-sm font-semibold text-cert-ink outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15"><option value="">All courses</option>{courses.map((course) => <option key={course.id || course.course_id} value={String(course.id || course.course_id)}>{titleFor(course, "Course")}</option>)}</select></label><span className="flex h-11 min-w-11 items-center justify-center rounded-2xl bg-cert-ink px-3 text-base font-bold text-cert-yellow">{visibleTasks.length}</span></div></div>
+            </header>
+            <div className="bg-[linear-gradient(180deg,#fbfefd_0%,#f5faf7_100%)] p-5 sm:p-6">
+              {visibleTasks.length === 0 ? <div className="rounded-[1.5rem] border border-dashed border-cert-line bg-[linear-gradient(135deg,#f6fffa_0%,#edf8f2_100%)] px-6 py-12 text-center"><h3 className="text-lg font-semibold text-cert-ink">No {activeTaskView === "assignment" ? "assignments" : "projects"} right now</h3><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500">Your trainer has not added any work for this course yet. New tasks will appear here automatically.</p></div> : <div className="space-y-3">{visibleTasks.map(renderTask)}</div>}
             </div>
           </section>
 
-          <aside className="h-fit rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)] xl:sticky xl:top-28">
-            <h3 className="text-lg font-semibold text-cert-ink">Submit Completed Work</h3>
-            <p className="mt-2 text-sm text-slate-500">Choose a file from Google Drive or your device, then add any notes for your trainer.</p>
+          <aside className={`h-fit overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.15)] xl:sticky xl:top-28 ${activePanel === "task-status" && taskStatusFilter === "approved" ? "hidden" : ""}`}>
+            <div className="border-b border-cert-line bg-[linear-gradient(135deg,#f4fff8_0%,#e9f8ef_100%)] px-6 py-6"><div className="flex items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.2em] text-cert-green-dark">Submission desk</p><h3 className="mt-2 text-xl font-semibold text-cert-ink">Submit completed work</h3><p className="mt-1 text-sm leading-6 text-slate-500">Upload your file and leave a note for your trainer.</p></div><span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-white text-cert-green-dark ring-1 ring-cert-line"><HardDriveUpload size={21} /></span></div></div>
+            <div className="p-5 sm:p-6">
             {submissionTask ? (
               <form onSubmit={submitWork} className="mt-5 space-y-4">
                 <p className="rounded-3xl bg-cert-mint px-4 py-3 text-sm font-semibold text-cert-ink">{titleFor(submissionTask, "Selected task")}</p>
-                {workFile ? (
+                {workFiles.length ? (
                   <div className="flex items-center justify-between gap-3 rounded-3xl border border-cert-green/30 bg-cert-mint px-4 py-3 text-sm text-cert-ink">
-                    <span className="inline-flex min-w-0 items-center gap-2 font-medium"><HardDriveUpload size={18} className="shrink-0 text-cert-green-dark" aria-hidden="true" /><span className="truncate">{workFile.name}</span></span>
-                    <button type="button" onClick={() => setWorkFile(null)} className="rounded-xl p-1 text-slate-500 transition hover:bg-white hover:text-cert-ink" aria-label="Remove selected file"><X size={18} aria-hidden="true" /></button>
+                    <span className="inline-flex min-w-0 items-center gap-2 font-medium"><HardDriveUpload size={18} className="shrink-0 text-cert-green-dark" aria-hidden="true" /><span className="truncate">{workFiles.length === 1 ? workFiles[0].name : `${workFiles.length} files from ${workSource || "selected folder"}`}</span></span>
+                    <button type="button" onClick={() => { setWorkFiles([]); setWorkSource(""); }} className="rounded-xl p-1 text-slate-500 transition hover:bg-white hover:text-cert-ink" aria-label="Remove selected files"><X size={18} aria-hidden="true" /></button>
                   </div>
                 ) : (
                   <button type="button" onClick={() => setShowWorkSourcePicker(true)} className="flex w-full items-center justify-center gap-2 rounded-3xl border border-dashed border-cert-green/50 bg-cert-mint px-4 py-4 text-sm font-semibold text-cert-green-dark transition hover:border-cert-green hover:bg-white">
@@ -761,18 +918,41 @@ export default function StudentDashboard() {
                 </div>
               </form>
             ) : (
-              <p className="mt-4 rounded-3xl bg-cert-mint p-5 text-sm text-slate-500">Choose Submit Work on an assignment or project.</p>
+              <div className="rounded-[1.5rem] border border-dashed border-cert-line bg-slate-50 px-5 py-10 text-center"><span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-cert-green-dark ring-1 ring-cert-line"><CheckCircle2 size={23} /></span><p className="mt-4 font-semibold text-cert-ink">Ready when you are</p><p className="mt-2 text-sm leading-6 text-slate-500">Choose <span className="font-semibold text-cert-green-dark">Submit Work</span> on an assignment or project to start your submission.</p></div>
             )}
             {submitSuccess && <p className="mt-4 rounded-3xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{submitSuccess}</p>}
+            </div>
           </aside>
           <input
             ref={fileInputRef}
             type="file"
             className="hidden"
             onChange={(event) => {
-              const [file] = event.target.files || [];
-              if (file) setWorkFile(file);
-              setShowWorkSourcePicker(false);
+              selectWorkFiles(event.target.files, "device");
+              event.target.value = "";
+            }}
+          />
+          <input
+            ref={driveFolderInputRef}
+            type="file"
+            className="hidden"
+            multiple
+            webkitdirectory=""
+            directory=""
+            onChange={(event) => {
+              selectWorkFiles(event.target.files, "Google Drive folder");
+              event.target.value = "";
+            }}
+          />
+          <input
+            ref={githubFolderInputRef}
+            type="file"
+            className="hidden"
+            multiple
+            webkitdirectory=""
+            directory=""
+            onChange={(event) => {
+              selectWorkFiles(event.target.files, "GitHub repository folder");
               event.target.value = "";
             }}
           />
@@ -786,13 +966,17 @@ export default function StudentDashboard() {
                 <button type="button" onClick={() => setShowWorkSourcePicker(false)} className="rounded-xl p-2 text-slate-500 transition hover:bg-cert-mint hover:text-cert-ink" aria-label="Close file source picker"><X size={20} aria-hidden="true" /></button>
               </div>
               <div className="mt-6 grid gap-3">
-                <button type="button" onClick={() => fileInputRef.current?.click()} className="flex items-center gap-3 rounded-2xl border border-cert-line bg-cert-mint p-4 text-left transition hover:border-cert-green hover:bg-white">
+                <button type="button" onClick={() => fileInputRef.current?.click()} className="flex items-center gap-3 rounded-2xl border border-cert-line bg-white p-4 text-left transition hover:border-cert-green hover:bg-cert-mint">
                   <HardDriveUpload size={22} className="shrink-0 text-cert-green-dark" aria-hidden="true" />
-                  <span><span className="block font-semibold text-cert-ink">Google Drive or device files</span><span className="mt-1 block text-sm text-slate-500">Open the system file picker to select a file, including a synced Google Drive folder.</span></span>
+                  <span><span className="block font-semibold text-cert-ink">Choose one file</span><span className="mt-1 block text-sm text-slate-500">Select a single completed-work file from your device.</span></span>
                 </button>
-                <button type="button" onClick={() => window.open("https://github.com", "_blank", "noopener,noreferrer")} className="flex items-center gap-3 rounded-2xl border border-cert-line bg-white p-4 text-left transition hover:border-cert-green hover:bg-cert-mint">
+                <button type="button" onClick={() => driveFolderInputRef.current?.click()} className="flex items-center gap-3 rounded-2xl border border-cert-line bg-cert-mint p-4 text-left transition hover:border-cert-green hover:bg-white">
+                  <HardDriveUpload size={22} className="shrink-0 text-cert-green-dark" aria-hidden="true" />
+                  <span><span className="block font-semibold text-cert-ink">Select Google Drive folder</span><span className="mt-1 block text-sm text-slate-500">Open the system folder picker and select a folder from a synced Google Drive.</span></span>
+                </button>
+                <button type="button" onClick={() => githubFolderInputRef.current?.click()} className="flex items-center gap-3 rounded-2xl border border-cert-line bg-white p-4 text-left transition hover:border-cert-green hover:bg-cert-mint">
                   <FolderGit2 size={22} className="shrink-0 text-cert-ink" aria-hidden="true" />
-                  <span><span className="block font-semibold text-cert-ink">Open GitHub</span><span className="mt-1 block text-sm text-slate-500">Open GitHub in a new tab to access your repository files.</span></span>
+                  <span><span className="block font-semibold text-cert-ink">Select GitHub repository folder</span><span className="mt-1 block text-sm text-slate-500">Choose a cloned GitHub repository folder from your system.</span></span>
                 </button>
               </div>
             </div>
@@ -823,9 +1007,9 @@ export default function StudentDashboard() {
               <h2 className="text-xl font-semibold text-cert-ink">Certificate progress</h2>
               <p className="mt-2 text-sm text-slate-500">Your certificate is issued automatically once your trainer approves every assignment and project for the course.</p>
               <div className="mt-6 h-3 overflow-hidden rounded-full bg-slate-100">
-                <div className="h-full rounded-full bg-cert-green" style={{ width: `${stats.progress}%` }} />
+                <div className="h-full rounded-full bg-cert-green" style={{ width: `${courseStats.progress}%` }} />
               </div>
-              <p className="mt-4 text-sm text-slate-500">{stats.approved} of {stats.totalTasks} required tasks approved.</p>
+              <p className="mt-4 text-sm text-slate-500">{courseStats.approved} of {courseStats.totalTasks} required tasks approved for {titleFor(selectedCourse, "this course")}.</p>
               <div className="mt-5 rounded-2xl bg-cert-mint px-4 py-3 text-sm text-slate-600"><p className="font-semibold text-cert-ink">Almost there</p><p className="mt-1">After the remaining work is approved, the certificate will appear here to download.</p></div>
             </div>
           )}

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Bell,
   Award,
-  BookOpenCheck,
   ChartNoAxesColumn,
   ClipboardList,
   GraduationCap,
@@ -21,7 +20,7 @@ const tabs = [
   { key: "requests", label: "Requests", path: "/admin/requests", icon: ClipboardList },
   { key: "trainers", label: "Trainers", path: "/admin/trainers", icon: UsersRound },
   { key: "students", label: "Students", path: "/admin/students", icon: GraduationCap },
-  { key: "courses", label: "Courses", path: "/admin/courses", icon: BookOpenCheck },
+  { key: "courses", label: "Courses", path: "/admin/courses" },
   { key: "mapping", label: "Mapping", path: "/admin/mapping", icon: Link2 },
   { key: "certificates", label: "Certificates", path: "/admin/certificates", icon: Award },
   { key: "analytics", label: "Analytics", path: "/admin/analytics", icon: ChartNoAxesColumn },
@@ -1675,7 +1674,7 @@ export default function AdminDashboard() {
   const statCards = [
     { label: "Total Students", value: metrics.totalStudents, hint: "Registered student profiles", icon: GraduationCap, tone: "bg-sky-50 text-sky-700 ring-sky-100", accent: "from-sky-400 via-cyan-400 to-emerald-400" },
     { label: "Pending Approvals", value: metrics.pendingApprovals, hint: "Requests waiting action", icon: ClipboardList, tone: "bg-amber-50 text-amber-700 ring-amber-100", accent: "from-amber-400 via-yellow-400 to-lime-400" },
-    { label: "Active Courses", value: metrics.activeCourses, hint: "Courses available now", icon: BookOpenCheck, tone: "bg-emerald-50 text-emerald-700 ring-emerald-100", accent: "from-emerald-400 via-green-400 to-lime-400" },
+    { label: "Active Courses", value: metrics.activeCourses, hint: "Courses available now", tone: "bg-emerald-50 text-emerald-700 ring-emerald-100", accent: "from-emerald-400 via-green-400 to-lime-400" },
     { label: "Trainers", value: metrics.totalTrainers, hint: "Trainer profiles", icon: UsersRound, tone: "bg-violet-50 text-violet-700 ring-violet-100", accent: "from-violet-400 via-fuchsia-400 to-pink-400" },
     { label: "Mapped Students", value: metrics.mappedStudents, hint: "Assigned to both trainer and course", icon: Link2, tone: "bg-teal-50 text-teal-700 ring-teal-100", accent: "from-teal-400 via-emerald-400 to-lime-400" },
   ];
@@ -1692,10 +1691,7 @@ export default function AdminDashboard() {
               <header className="relative overflow-hidden bg-[radial-gradient(circle_at_88%_12%,rgba(231,232,91,0.32),transparent_30%),linear-gradient(135deg,#062239_0%,#08415a_56%,#0c8a58_128%)] p-5 text-white sm:p-6">
                 <div className="absolute -bottom-12 -right-8 h-36 w-36 rounded-full border border-white/10" />
                 <div className="relative flex items-start justify-between gap-4">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-cert-yellow backdrop-blur"><BookOpenCheck size={24} aria-hidden="true" /></span>
-                    <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-50/75">Course workspace</p><h3 className="mt-1 truncate text-2xl font-semibold tracking-tight">{course.course_name}</h3></div>
-                  </div>
+                  <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-50/75">Course workspace</p><h3 className="mt-1 truncate text-2xl font-semibold tracking-tight">{course.course_name}</h3></div>
                   <span className="shrink-0 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-bold uppercase tracking-[0.14em] text-cert-yellow backdrop-blur">{course.status || "active"}</span>
                 </div>
                 <p className="relative mt-5 text-sm text-emerald-50/80">Trainer and student enrollment overview</p>
@@ -1765,7 +1761,7 @@ export default function AdminDashboard() {
                         : "bg-white text-cert-ink ring-1 ring-cert-line hover:bg-cert-mint"
                     }`}
                   >
-                    <Icon size={16} aria-hidden="true" />
+                    {Icon && <Icon size={16} aria-hidden="true" />}
                     {label}
                   </button>
                 );
@@ -1826,9 +1822,7 @@ export default function AdminDashboard() {
                       <div className="relative flex h-full flex-col justify-between">
                         <div className="flex items-start justify-between gap-3">
                           <p className="max-w-[9rem] text-[0.65rem] font-bold uppercase tracking-[0.18em] text-slate-500 sm:text-xs">{card.label}</p>
-                          <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 ${card.tone}`}>
-                            <Icon size={19} aria-hidden="true" />
-                          </span>
+                          {Icon && <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ring-1 ${card.tone}`}><Icon size={19} aria-hidden="true" /></span>}
                         </div>
                         <div className="mt-4">
                           <p className="text-4xl font-bold tracking-tight text-cert-ink sm:text-5xl">{card.value}</p>
@@ -2286,10 +2280,7 @@ export default function AdminDashboard() {
                   <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50 text-violet-700"><UsersRound size={20} aria-hidden="true" /></span>
                   <div><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Trainer</p><p className="mt-1 font-semibold text-cert-ink">{mapTrainerId ? "Selected" : "Not selected"}</p></div>
                 </div>
-                <div className="flex items-center gap-3 rounded-2xl border border-cert-line p-4">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"><BookOpenCheck size={20} aria-hidden="true" /></span>
-                  <div><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Course</p><p className="mt-1 font-semibold text-cert-ink">{mapCourseId ? "Selected" : "Not selected"}</p></div>
-                </div>
+                <div className="rounded-2xl border border-cert-line p-4"><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Course</p><p className="mt-1 font-semibold text-cert-ink">{mapCourseId ? "Selected" : "Not selected"}</p></div>
                 <div className="rounded-2xl bg-cert-ink p-4 text-sm leading-6 text-emerald-50"><p className="font-semibold text-white">What happens next?</p><p className="mt-1">Students receive course access, and their trainer can create assignments and projects for them.</p></div>
               </div>
             </aside>
