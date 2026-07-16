@@ -200,6 +200,7 @@ export default function StudentDashboard() {
   const [taskStatusFilter, setTaskStatusFilter] = useState("");
   const [taskCourseFilter, setTaskCourseFilter] = useState("");
   const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
   const fileInputRef = useRef(null);
   const driveFolderInputRef = useRef(null);
   const githubFolderInputRef = useRef(null);
@@ -377,7 +378,7 @@ export default function StudentDashboard() {
     };
 
     loadDashboard();
-  }, [profile, user]);
+  }, [profile, user, dashboardRefreshKey]);
 
   const taskSummaries = useMemo(() => {
     const submissionByTask = new Map();
@@ -523,6 +524,9 @@ export default function StudentDashboard() {
     if (taskType) setActiveTaskView(taskType);
     setTaskStatusFilter(status || "");
     setActivePanel(panel);
+    if (panel === "assignments" || panel === "projects" || panel === "task-status") {
+      setDashboardRefreshKey((current) => current + 1);
+    }
     window.history.replaceState(null, "", `#${panel}`);
     document.getElementById("student-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
