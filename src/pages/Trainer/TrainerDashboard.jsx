@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Award, CheckCircle2, ClipboardCheck, LogOut, Plus, Sparkles, UsersRound, Video } from "lucide-react";
+import { Award, Bell, CheckCircle2, ClipboardCheck, LogOut, Plus, Sparkles, UsersRound, Video } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
@@ -96,6 +96,7 @@ export default function TrainerDashboard() {
   const [projects, setProjects] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [certificates, setCertificates] = useState([]);
+  const [notifications, setNotifications] = useState([]);
   const [courseVideos, setCourseVideos] = useState([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -159,6 +160,12 @@ export default function TrainerDashboard() {
         : await fetchRows("certificates", (query) => query.in("course_id", courseIds)))
       : [];
     const certificateRows = allCertificates.filter((certificate) => courseIds.some((courseId) => String(courseId) === String(certificate.course_id)));
+    const allNotifications = hasServiceRoleKey
+      ? await fetchRowsWithServiceRole("trainer_notifications")
+      : await fetchRows("trainer_notifications", (query) => query.eq("trainer_id", profile.id).order("created_at", { ascending: false }));
+    const notificationRows = allNotifications
+      .filter((notification) => String(notification.trainer_id) === String(profile.id))
+      .sort((first, second) => String(second.created_at || "").localeCompare(String(first.created_at || "")));
     const allCourseVideos = courseIds.length
       ? (hasServiceRoleKey
         ? await fetchRowsWithServiceRole("course_videos")
@@ -175,12 +182,24 @@ export default function TrainerDashboard() {
     setProjects(projectRows);
     setSubmissions(submissionRows);
     setCertificates(certificateRows);
+    setNotifications(notificationRows);
     setCourseVideos(videoRows);
     setLoading(false);
   };
 
   useEffect(() => {
     loadDashboard();
+  }, [profile?.id]);
+
+  useEffect(() => {
+    if (!profile?.id) return undefined;
+    const channel = supabase
+      .channel(`trainer-notifications-${profile.id}`)
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "trainer_notifications", filter: `trainer_id=eq.${profile.id}` }, (payload) => {
+        setNotifications((current) => [payload.new, ...current.filter((notification) => String(notification.id) !== String(payload.new.id))]);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
   }, [profile?.id]);
 
   const studentById = useMemo(() => new Map(students.map((student) => [String(student.id), student])), [students]);
@@ -236,6 +255,17 @@ export default function TrainerDashboard() {
     setActiveWorkspace(workspace);
     window.history.replaceState(null, "", `#${workspace}`);
     window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const markNotificationsRead = async (notificationType) => {
+    const unreadIds = notifications
+      .filter((notification) => !notification.is_read && (!notificationType || notification.notification_type === notificationType))
+      .map((notification) => notification.id)
+      .filter(Boolean);
+    if (!unreadIds.length) return;
+    setNotifications((current) => current.map((notification) => unreadIds.includes(notification.id) ? { ...notification, is_read: true } : notification));
+    const { error: readError } = await supabase.from("trainer_notifications").update({ is_read: true }).in("id", unreadIds);
+    if (readError) await loadDashboard();
   };
 
   const createAssignment = async (event) => {
@@ -364,19 +394,24 @@ export default function TrainerDashboard() {
       setError(`Certificate cannot be issued yet. ${remaining} still need trainer approval.`);
       return;
     }
-    const { error: certificateError } = await supabase.from("certificates").insert({
+    const { data: certificate, error: certificateError } = await supabase.from("certificates").insert({
       student_id: studentId,
       course_id: courseId,
       certificate_number: `CERT-${Date.now().toString().slice(-8)}`,
       issue_date: new Date().toISOString().slice(0, 10),
       status: "issued",
       issued_by: profile.id,
-    });
+    }).select().single();
     if (certificateError) {
       setError(certificateError.message || "Unable to issue certificate.");
       return;
     }
-    setMessage("Certificate issued to the student.");
+    const { error: emailError } = await supabase.functions.invoke("send-certificate-email", {
+      body: { certificateId: certificate.id },
+    });
+    setMessage(emailError
+      ? "Certificate issued to the student, but the email could not be sent. Check the email function SMTP settings."
+      : "Certificate issued and emailed to the student.");
     await loadDashboard();
   };
 
@@ -423,6 +458,8 @@ export default function TrainerDashboard() {
 
   const awaitingSubmissions = submissions.filter((submission) => (submission.status || "").toLowerCase() === "submitted");
   const awaitingProjects = projects.filter((project) => (project.status || "").toLowerCase() === "submitted");
+  const assignmentReviewAlertCount = awaitingSubmissions.length;
+  const projectReviewAlertCount = awaitingProjects.length;
 
   return (
     <div className="cert-bg-trainer min-h-screen px-4 py-4 sm:px-6 lg:px-8">
@@ -434,8 +471,8 @@ export default function TrainerDashboard() {
             <button type="button" onClick={() => openWorkspace("assign-project")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "assign-project" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Assign project</button>
             <button type="button" onClick={() => openWorkspace("add-videos")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "add-videos" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Video size={16} /> Add videos</button>
             <button type="button" onClick={() => openWorkspace("certificate-approvals")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "certificate-approvals" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Award size={16} /> Certificates</button>
-            <button type="button" onClick={() => openWorkspace("project-reviews")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "project-reviews" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Project reviews</button>
-            <button type="button" onClick={() => openWorkspace("assignment-submissions")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "assignment-submissions" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Assignment submissions</button>
+            <button type="button" onClick={() => { openWorkspace("project-reviews"); markNotificationsRead("project_submission"); }} className={`relative inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${projectReviewAlertCount > 0 ? "border-rose-300 bg-rose-50 text-rose-700 shadow-sm shadow-rose-100 hover:bg-rose-100" : activeWorkspace === "project-reviews" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Bell size={16} className={projectReviewAlertCount > 0 ? "text-rose-600" : ""} /> Project reviews{projectReviewAlertCount > 0 && <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[0.65rem] font-bold text-white">{projectReviewAlertCount}</span>}</button>
+            <button type="button" onClick={() => { openWorkspace("assignment-submissions"); markNotificationsRead("assignment_submission"); }} className={`relative inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${assignmentReviewAlertCount > 0 ? "border-rose-300 bg-rose-50 text-rose-700 shadow-sm shadow-rose-100 hover:bg-rose-100" : activeWorkspace === "assignment-submissions" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Bell size={16} className={assignmentReviewAlertCount > 0 ? "text-rose-600" : ""} /> Assignment submissions{assignmentReviewAlertCount > 0 && <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[0.65rem] font-bold text-white">{assignmentReviewAlertCount}</span>}</button>
             <button type="button" onClick={handleLogout} className="inline-flex items-center gap-2 rounded-xl bg-cert-ink px-4 py-2 text-sm font-semibold text-white transition hover:bg-cert-green-dark">
               <LogOut size={16} /> Logout
             </button>
