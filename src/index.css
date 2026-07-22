@@ -22,6 +22,7 @@
   body {
     min-width: 320px;
     min-height: 100vh;
+    overflow-x: hidden;
     background:
       radial-gradient(circle at 12% 0%, rgba(49, 201, 111, 0.13), transparent 28rem),
       radial-gradient(circle at 88% 12%, rgba(6, 50, 79, 0.09), transparent 26rem),
@@ -45,6 +46,13 @@
 
   button:disabled {
     cursor: not-allowed;
+  }
+
+  /* Keep long user-entered names, links, and form values from widening a page
+     beyond the device viewport. Individual panels can still scroll vertically. */
+  #root {
+    min-height: 100vh;
+    overflow-x: clip;
   }
 
   ::selection {
