@@ -95,7 +95,7 @@ serve(async (req) => {
         "",
         "Your trainer account has been created.",
         "",
-        `Login name: ${name}`,
+        `Trainer name: ${name}`,
         `Trainer ID: ${trainerId}`,
         `Login email: ${email}`,
         `Password: ${password}`,
@@ -105,7 +105,7 @@ serve(async (req) => {
         <h2>Trainer account created</h2>
         <p>Hello ${safeName},</p>
         <p>Your trainer account has been created.</p>
-        <p><strong>Login name:</strong> ${safeName}</p>
+        <p><strong>Trainer name:</strong> ${safeName}</p>
         <p><strong>Trainer ID:</strong> ${safeTrainerId}</p>
         <p><strong>Login email:</strong> ${escapeHtml(email)}</p>
         <p><strong>Password:</strong> ${safePassword}</p>

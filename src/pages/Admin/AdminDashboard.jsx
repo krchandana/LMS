@@ -237,7 +237,13 @@ const normalizeStudentId = (studentId) => {
 };
 
 const studentAuthEmailFor = (studentId) => `${normalizeStudentId(studentId).toLowerCase()}@student.local`;
-const generateStudentLoginId = () => `STU${Math.floor(10000 + Math.random() * 90000)}`;
+const nextStudentLoginId = async () => {
+  const { data, error } = await supabase.rpc("next_student_login_id");
+  if (error || typeof data !== "string" || !data.trim()) {
+    throw error || new Error("Unable to generate the next student ID.");
+  }
+  return data.trim();
+};
 
 const generateStudentPassword = () => `Stud@${Date.now().toString().slice(-6)}${Math.floor(10 + Math.random() * 90)}`;
 
@@ -278,13 +284,12 @@ const generateTrainerPassword = () => {
   return picked.join(" ");
 };
 
-const generateTrainerReferenceId = () => {
-  const chars = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
-  let value = "TRN-";
-  for (let index = 0; index < 8; index += 1) {
-    value += chars[Math.floor(Math.random() * chars.length)];
+const nextTrainerReferenceId = async () => {
+  const { data, error } = await supabase.rpc("next_trainer_reference_id");
+  if (error || typeof data !== "string" || !data.trim()) {
+    throw error || new Error("Unable to generate the next trainer ID.");
   }
-  return value;
+  return data.trim();
 };
 
 const sendStudentApprovalEmail = async ({ email, name, studentId, password }) => {
@@ -455,6 +460,13 @@ const fmtDate = (value) => {
   return date.toLocaleDateString();
 };
 
+const courseDurationComplete = (course) => {
+  const endDate = course?.end_date;
+  if (!endDate) return false;
+  const end = new Date(`${endDate}T23:59:59`);
+  return !Number.isNaN(end.getTime()) && end.getTime() < Date.now();
+};
+
 const firstValue = (...values) => values.find((value) => value !== null && value !== undefined && value !== "");
 
 export default function AdminDashboard() {
@@ -485,6 +497,7 @@ export default function AdminDashboard() {
   const [courseTitle, setCourseTitle] = useState("");
   const [courseDescription, setCourseDescription] = useState("");
   const [courseDuration, setCourseDuration] = useState("");
+  const [courseEndDate, setCourseEndDate] = useState("");
   const [courseStatus, setCourseStatus] = useState("active");
 
   const [mapStudentIds, setMapStudentIds] = useState([]);
@@ -945,7 +958,16 @@ export default function AdminDashboard() {
 
     let profileId = firstValue(request.profile_id, request.user_id);
     const rawStudentLoginId = firstValue(request.student_id, request.student_login_id);
-    const studentLoginId = normalizeStudentId(rawStudentLoginId) || generateStudentLoginId();
+    let studentLoginId = normalizeStudentId(rawStudentLoginId);
+    if (!studentLoginId) {
+      try {
+        studentLoginId = await nextStudentLoginId();
+      } catch (err) {
+        setSaving(false);
+        setError(err?.message || "Unable to generate the next student ID.");
+        return;
+      }
+    }
     const studentName = firstValue(request.full_name, request.name, request.email, "Student");
     const studentEmail = (request.email || "").trim();
     const authEmail = firstValue(request.auth_email, studentAuthEmailFor(studentLoginId));
@@ -1153,9 +1175,8 @@ export default function AdminDashboard() {
 
     const nextPassword = trainerPassword.trim() || generateTrainerPassword();
     const nextPasswordValue = nextPassword.trim();
-    const nextTrainerReferenceId = generateTrainerReferenceId();
-
     try {
+      const nextTrainerId = await nextTrainerReferenceId();
       const nextTrainerEmail = (trainerEmail.trim() || `trainer-${Date.now()}@trainer.local`).toLowerCase();
 
       // Check the profile first so a second trainer is added as a new account,
@@ -1178,7 +1199,7 @@ export default function AdminDashboard() {
         password: nextPasswordValue,
         fullName: trainerName.trim(),
         status: trainerStatus,
-        trainerReferenceId: nextTrainerReferenceId,
+        trainerReferenceId: nextTrainerId,
       });
 
       if (authResult.error) {
@@ -1267,7 +1288,7 @@ export default function AdminDashboard() {
         email: nextTrainerEmail,
         name: trainerName.trim(),
         password: nextPasswordValue,
-        trainerId: nextTrainerReferenceId,
+        trainerId: nextTrainerId,
         loginUrl: `${window.location.origin}/trainer-login`,
       });
 
@@ -1374,6 +1395,12 @@ export default function AdminDashboard() {
       return;
     }
 
+    if (!courseEndDate) {
+      setSaving(false);
+      setError("Course end date is required.");
+      return;
+    }
+
     const payload = {
       title: courseTitle.trim(),
       name: courseTitle.trim(),
@@ -1381,6 +1408,7 @@ export default function AdminDashboard() {
       description: courseDescription.trim() || null,
       course_description: courseDescription.trim() || null,
       duration: courseDuration.trim() || null,
+      end_date: courseEndDate,
       status: courseStatus,
     };
 
@@ -1403,6 +1431,7 @@ export default function AdminDashboard() {
       setCourseTitle("");
       setCourseDescription("");
       setCourseDuration("");
+      setCourseEndDate("");
       setCourseStatus("active");
       await loadData();
     } catch (err) {
@@ -1580,12 +1609,18 @@ export default function AdminDashboard() {
     await loadData();
   };
 
-  const toggleCourseStatus = async (course) => {
+  const setCourseStatusByAdmin = async (course, nextStatus) => {
+    if (!course?.id) return;
+    const courseName = firstValue(course.title, course.name, course.course_name, "this course");
+    const permissionMessage = nextStatus === "inactive"
+      ? `Approve setting "${courseName}" to inactive? Students and trainers will no longer see it as an active course.`
+      : `Reactivate "${courseName}"?`;
+    if (!window.confirm(permissionMessage)) return;
+
     setSaving(true);
     setError("");
     setSuccess("");
 
-    const nextStatus = (course.status || "active").toLowerCase() === "active" ? "inactive" : "active";
     const result = await safeUpdate("courses", course.id, { status: nextStatus });
     setSaving(false);
 
@@ -1594,7 +1629,7 @@ export default function AdminDashboard() {
       return;
     }
 
-    setSuccess("Course status updated.");
+    setSuccess(nextStatus === "inactive" ? "Course set to inactive with admin approval." : "Course reactivated.");
     await loadData();
   };
 
@@ -2094,7 +2129,11 @@ export default function AdminDashboard() {
           <section className="mx-auto grid w-full max-w-7xl gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
               <div className="space-y-5">
                 {courses.length === 0 && <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">No courses available.</p>}
-                {courses.map((course) => (
+                {courses.map((course) => {
+                  const durationComplete = courseDurationComplete(course);
+                  const isActive = (course.status || "active").toLowerCase() === "active";
+
+                  return (
                   <article key={course.id} className="overflow-hidden rounded-2xl border border-cert-line bg-slate-50 shadow-[0_16px_35px_-30px_rgba(7,26,47,0.38)]">
                     <div className="grid md:grid-cols-[13rem_minmax(0,1fr)]">
                       {course.thumbnail_url ? (
@@ -2119,20 +2158,25 @@ export default function AdminDashboard() {
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
                             <h3 className="text-2xl font-semibold text-cert-ink">{firstValue(course.title, course.name, course.course_name, "Untitled course")}</h3>
-                            <p className="mt-2 text-sm font-medium text-cert-ink">{firstValue(course.duration, "Duration unavailable")} | Online</p>
+                            <p className="mt-2 text-sm font-medium text-cert-ink">{firstValue(course.duration, "Duration unavailable")} | Ends {course.end_date ? fmtDate(course.end_date) : "not scheduled"} | Online</p>
                           </div>
                           <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${(course.status || "active").toLowerCase() === "active" ? "bg-cert-green/15 text-cert-green-dark" : "bg-slate-200 text-slate-600"}`}>
                             {course.status || "active"}
                           </span>
                         </div>
                         <p className="mt-4 text-sm leading-6 text-slate-600">{firstValue(course.description, course.course_description, "Course description will be added soon.")}</p>
+                        {durationComplete && isActive && <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">Course duration has ended. Admin approval is required to set this course inactive.</p>}
                         <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-cert-line pt-4">
                           <p className="inline-flex items-center gap-2 text-sm font-medium text-slate-600"><UsersRound size={17} className="text-cert-green-dark" aria-hidden="true" /> {courseEnrollmentById.get(String(course.id)) || 0} students enrolled</p>
+                          <button type="button" disabled={saving} onClick={() => setCourseStatusByAdmin(course, isActive ? "inactive" : "active")} className={`rounded-xl px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60 ${isActive ? "bg-slate-900 text-white hover:bg-cert-ink" : "bg-cert-green text-cert-ink hover:bg-cert-green-dark hover:text-white"}`}>
+                            {isActive ? (durationComplete ? "Approve & set inactive" : "Set inactive") : "Reactivate"}
+                          </button>
                         </div>
                       </div>
                     </div>
                   </article>
-                ))}
+                  );
+                })}
               </div>
             <form onSubmit={createCourse} className="h-fit rounded-[1.75rem] border border-cert-line bg-white p-6 xl:sticky xl:top-28">
               <h2 className="text-xl font-semibold text-cert-ink">Create Course</h2>
@@ -2149,6 +2193,11 @@ export default function AdminDashboard() {
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Duration</label>
                   <input value={courseDuration} onChange={(event) => setCourseDuration(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" placeholder="16 weeks" required />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700">Course end date</label>
+                  <input type="date" value={courseEndDate} onChange={(event) => setCourseEndDate(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" required />
+                  <p className="mt-1 text-xs text-slate-500">When this date passes, only an admin can approve setting the course inactive.</p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Status</label>

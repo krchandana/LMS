@@ -15,7 +15,13 @@ const isAuthServiceUnavailable = (error) => {
 
 const normalizeStudentId = (studentId) => studentId.trim().toUpperCase();
 const studentAuthEmailFor = (studentId) => `${normalizeStudentId(studentId).toLowerCase()}@student.local`;
-const generateStudentLoginId = () => `STU${Math.floor(10000 + Math.random() * 90000)}`;
+const nextStudentLoginId = async () => {
+  const { data, error } = await supabase.rpc("next_student_login_id");
+  if (error || typeof data !== "string" || !data.trim()) {
+    throw error || new Error("Unable to generate the next student ID.");
+  }
+  return data.trim();
+};
 
 const isMissingTableError = (error) =>
   error?.message?.toLowerCase().includes("could not find the table") ||
@@ -362,7 +368,13 @@ const LoginPage = () => {
       }
     }
 
-    const studentId = generateStudentLoginId();
+    let studentId;
+    try {
+      studentId = await nextStudentLoginId();
+    } catch (err) {
+      setError(err?.message || "Unable to generate the next student ID.");
+      return;
+    }
     const authEmail = studentAuthEmailFor(studentId);
     const temporaryPassword = `Pending@${Date.now().toString().slice(-6)}`;
 
