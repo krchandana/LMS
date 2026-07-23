@@ -2290,8 +2290,8 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "mapping" && (
-          <section className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(19rem,0.65fr)] xl:items-start">
-            <form id="mapping-controls" onSubmit={saveMapping} className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.22)]">
+          <section className="mx-auto w-full max-w-4xl">
+            <form onSubmit={saveMapping} className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.22)]">
               <div className="relative overflow-hidden bg-[radial-gradient(circle_at_90%_16%,rgba(231,232,91,0.3),transparent_28%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_130%)] px-6 py-7 text-white sm:px-8">
                 <div className="absolute -bottom-10 right-8 h-28 w-28 rounded-full border border-white/10" />
                 <div className="relative flex items-start justify-between gap-4">
@@ -2389,26 +2389,6 @@ export default function AdminDashboard() {
                 </button>
               </div>
             </form>
-            <aside className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.18)] xl:sticky xl:top-28">
-              <div className="bg-cert-mint p-6">
-                <p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Mapping preview</p>
-                <h3 className="mt-2 text-2xl font-semibold text-cert-ink">Ready to connect</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-600">Review the selected learning path before saving.</p>
-                <a href="#mapping-controls" className="mt-4 inline-flex rounded-xl bg-cert-navy px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cert-green-dark">Choose student, trainer, and course</a>
-              </div>
-              <div className="space-y-3 p-5">
-                <div className="flex items-center gap-3 rounded-2xl border border-cert-line p-4">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 text-sky-700"><GraduationCap size={20} aria-hidden="true" /></span>
-                  <div><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Students</p><p className="mt-1 font-semibold text-cert-ink">{mapStudentIds.length ? `${mapStudentIds.length} selected` : "Not selected"}</p></div>
-                </div>
-                <div className="flex items-center gap-3 rounded-2xl border border-cert-line p-4">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50 text-violet-700"><UsersRound size={20} aria-hidden="true" /></span>
-                  <div><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Trainer</p><p className="mt-1 font-semibold text-cert-ink">{mapTrainerId ? "Selected" : "Not selected"}</p></div>
-                </div>
-                <div className="rounded-2xl border border-cert-line p-4"><p className="text-xs font-semibold uppercase tracking-[0.15em] text-slate-500">Course</p><p className="mt-1 font-semibold text-cert-ink">{mapCourseId ? "Selected" : "Not selected"}</p></div>
-                <div className="rounded-2xl bg-cert-ink p-4 text-sm leading-6 text-emerald-50"><p className="font-semibold text-white">What happens next?</p><p className="mt-1">Students receive course access, and their trainer can create assignments and projects for them.</p></div>
-              </div>
-            </aside>
           </section>
         )}
 
