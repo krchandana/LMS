@@ -976,6 +976,11 @@ export default function AdminDashboard() {
     [courses, enrichedStudents, trainerNameById]
   );
 
+  const unassignedStudentCount = useMemo(
+    () => enrichedStudents.filter((student) => !student.enrolled_courses?.length).length,
+    [enrichedStudents]
+  );
+
   const metrics = useMemo(() => {
     const activeCourses = courses.filter((course) => (course.status || "active").toLowerCase() === "active").length;
     const mappedStudents = enrichedStudents.filter((student) =>
@@ -1673,62 +1678,20 @@ export default function AdminDashboard() {
       return;
     }
 
-    const selectedTrainerName = trainerNameById.get(String(mapTrainerId)) || null;
-    let courseResult = await safeUpdate("courses", mapCourseId, {
-      trainer_id: mapTrainerId,
-      trainer_name: selectedTrainerName,
+    const { data, error: mappingError } = await supabase.functions.invoke("save-student-mapping", {
+      body: { studentIds: mapStudentIds, trainerId: mapTrainerId, courseId: mapCourseId },
     });
-    if (courseResult.error && hasServiceRoleKey) {
-      const serviceResult = await serviceRoleTableRequest(
-        "courses",
-        `?id=eq.${encodeURIComponent(mapCourseId)}&select=*`,
-        "PATCH",
-        { trainer_id: mapTrainerId, trainer_name: selectedTrainerName }
-      );
-      courseResult = serviceResult.error
-        ? { error: serviceResult.error }
-        : { data: Array.isArray(serviceResult.data) ? serviceResult.data[0] : serviceResult.data };
-    }
-
-    if (courseResult.error || !courseResult.data) {
-      setSaving(false);
-      setError(getDbErrorMessage(courseResult.error, "Student enrolled, but the trainer could not be assigned to the course."));
-      return;
-    }
-
-    // A course has one trainer, while several students can be enrolled in it.
-    // Save each selected student after the course trainer is confirmed.
-    const failedStudentIds = [];
-    for (const studentId of mapStudentIds) {
-      // An enrollment belongs to a student-course pair. Looking up only by
-      // student overwrote the student's previous course enrollment.
-      const existingEnrollment = enrollmentRows.find(
-        (enrollment) =>
-          String(enrollment.student_id) === String(studentId) &&
-          String(enrollment.course_id) === String(mapCourseId)
-      );
-      const enrollmentPayload = {
-        student_id: studentId,
-        course_id: mapCourseId,
-        enrollment_status: "active",
-      };
-      const enrollmentResult = existingEnrollment?.id
-        ? await upsertWithServiceFallback("enrollments", { ...enrollmentPayload, id: existingEnrollment.id }, "id")
-        : await insertWithServiceFallback("enrollments", enrollmentPayload);
-
-      if (enrollmentResult.error || enrollmentResult.skipped || !enrollmentResult.data) failedStudentIds.push(studentId);
-    }
-
-    const mappedStudentCount = mapStudentIds.length - failedStudentIds.length;
     setMapStudentIds([]);
     setShowStudentPicker(false);
     setMapTrainerId("");
     setMapCourseId("");
     setSaving(false);
-    if (failedStudentIds.length) {
-      setError(`${mappedStudentCount} student${mappedStudentCount === 1 ? "" : "s"} mapped, but ${failedStudentIds.length} could not be enrolled. Please try those students again.`);
+    if (mappingError || data?.error) {
+      setError(data?.error || mappingError?.message || "Unable to save the mapping.");
     } else {
-      setSuccess(`${mappedStudentCount} student${mappedStudentCount === 1 ? "" : "s"}, course, and trainer mapping saved.`);
+      const failedCount = data?.failedStudentIds?.length || 0;
+      const message = `${data?.mappedCount || 0} student${data?.mappedCount === 1 ? "" : "s"}, course, and trainer mapping saved.`;
+      failedCount ? setError(`${message} ${failedCount} student${failedCount === 1 ? "" : "s"} could not be enrolled.`) : setSuccess(message);
     }
     await loadData();
   };
@@ -2349,12 +2312,12 @@ export default function AdminDashboard() {
                     aria-expanded={showStudentPicker}
                     className="mt-4 flex w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-left text-sm text-cert-ink outline-none transition hover:border-cert-green focus:border-cert-green focus:ring-4 focus:ring-cert-green/15"
                   >
-                    <span>{mapStudentIds.length ? `${mapStudentIds.length} student${mapStudentIds.length === 1 ? "" : "s"} selected` : "Select students"}</span>
+                    <span>{mapStudentIds.length ? `${mapStudentIds.length} student${mapStudentIds.length === 1 ? "" : "s"} selected` : `Select students${unassignedStudentCount ? ` (${unassignedStudentCount} unassigned)` : ""}`}</span>
                     <span className="text-lg leading-none text-slate-500" aria-hidden="true">{showStudentPicker ? "⌃" : "⌄"}</span>
                   </button>
                   {showStudentPicker && <div className="mt-3 max-h-56 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-3">
                     <div className="flex items-center justify-between gap-3 border-b border-cert-line px-2 pb-2">
-                      <p className="text-xs text-slate-500">Choose one or more students.</p>
+                      <p className="text-xs text-slate-500">Choose one or more students. {unassignedStudentCount} currently have no course.</p>
                       <button
                         type="button"
                         onClick={() => setMapStudentIds(mapStudentIds.length === enrichedStudents.length ? [] : enrichedStudents.map((student) => String(student.id)))}

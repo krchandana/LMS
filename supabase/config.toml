@@ -29,3 +29,8 @@ entrypoint = "./functions/submit-student-registration/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/approve-student-registration/index.ts"
+
+[functions.save-student-mapping]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/save-student-mapping/index.ts"
