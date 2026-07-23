@@ -9,7 +9,6 @@ import {
   Link2,
   LogOut,
   ShieldCheck,
-  Sparkles,
   UserCheck,
   UsersRound,
   Video,
@@ -26,7 +25,6 @@ const tabs = [
   { key: "courses", label: "Courses", path: "/admin/courses" },
   { key: "mapping", label: "Mapping", path: "/admin/mapping", icon: Link2 },
   { key: "certificates", label: "Certificates", path: "/admin/certificates", icon: Award },
-  { key: "insights", label: "AI Insights", path: "/admin/insights", icon: Sparkles },
   { key: "analytics", label: "Analytics", path: "/admin/analytics", icon: ChartNoAxesColumn },
 ];
 
