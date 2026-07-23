@@ -30,6 +30,49 @@ const formatVideoAvailability = (date) => {
 };
 const videoIsActive = (video) => Boolean(video?.available_at) && new Date(video.available_at).getTime() <= Date.now();
 
+const instructionLabels = "Objective|Dataset(?:\\s+(?:Columns|Requirements))?|Requirements?|Tasks?|Expected Output|Deliverables?|Steps?|Code";
+const instructionHeadingPattern = new RegExp(`(?:^|\\n\\n)(${instructionLabels}):\\s*`, "gi");
+
+const formatTaskDescription = (value) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+
+  return text
+    .replace(new RegExp(`\\s*(${instructionLabels})\\s*:?\\s*`, "gi"), (_, label, offset) => `${offset ? "\n\n" : ""}${label.replace(/\\b\\w/g, (letter) => letter.toUpperCase())}: `)
+    .replace(/\s+(\d+[.)])\s+/g, "\n$1 ")
+    .trim();
+};
+
+const taskInstructionSections = (description) => {
+  const formatted = formatTaskDescription(description);
+  if (!formatted) return [];
+
+  const headings = [...formatted.matchAll(instructionHeadingPattern)];
+  if (!headings.length) return [{ label: "Instructions", content: formatted }];
+
+  return headings.map((heading, index) => ({
+    label: heading[1],
+    content: formatted.slice((heading.index || 0) + heading[0].length, index + 1 < headings.length ? headings[index + 1].index : undefined).trim(),
+  })).filter((section) => section.content);
+};
+
+const TaskInstructions = ({ description }) => {
+  const sections = taskInstructionSections(description);
+  if (!sections.length) return null;
+
+  return <div className="mt-4 space-y-3">{sections.map((section) => {
+    const steps = section.label.toLowerCase().startsWith("task") || section.label.toLowerCase().startsWith("step")
+      ? section.content.split(/(?:^|\n)(?:\d+[.)]|[-•])\s+/).filter(Boolean)
+      : [];
+    return <section key={section.label} className="rounded-xl border border-cert-line bg-white/80 p-3.5">
+      <p className="text-xs font-bold uppercase tracking-[0.14em] text-cert-green-dark">{section.label}</p>
+      {steps.length > 1
+        ? <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm leading-6 text-slate-600">{steps.map((step, index) => <li key={`${section.label}-${index}`}>{step}</li>)}</ol>
+        : <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">{section.content}</p>}
+    </section>;
+  })}</div>;
+};
+
 const fetchRows = async (table, buildQuery) => {
   try {
     let query = supabase.from(table).select("*");
@@ -284,7 +327,7 @@ export default function TrainerDashboard() {
     const { data: assignedCount, error: createError } = await supabase.rpc("assign_assignment_to_enrolled_students", {
       p_course_id: assignmentForm.courseId,
       p_title: assignmentForm.title.trim(),
-      p_description: assignmentForm.description.trim() || null,
+      p_description: formatTaskDescription(assignmentForm.description) || null,
       p_due_date: assignmentForm.dueDate || null,
     });
     if (createError) {
@@ -316,7 +359,7 @@ export default function TrainerDashboard() {
     const { data: assignedCount, error: createError } = await supabase.rpc("assign_project_to_enrolled_students", {
       p_course_id: projectForm.courseId,
       p_title: projectForm.title.trim(),
-      p_description: projectForm.description.trim() || null,
+      p_description: formatTaskDescription(projectForm.description) || null,
     });
     if (createError) {
       setError(createError.message || "Unable to assign project.");
@@ -520,7 +563,7 @@ export default function TrainerDashboard() {
               <label className="text-sm font-semibold text-cert-ink">Course<select value={assignmentForm.courseId} onChange={(e) => setAssignmentForm({ ...assignmentForm, courseId: e.target.value })} className="mt-2 w-full rounded-xl border border-cert-line bg-cert-mint px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select></label>
               <p className="rounded-2xl border border-cert-line bg-cert-mint px-4 py-3 text-sm leading-5 text-slate-600">{assignmentForm.courseId ? <>This assignment will be stored under this course and available to <strong className="text-cert-ink">all {enrolledStudentIds(assignmentForm.courseId).length} enrolled students</strong>.</> : "Select a course to make the assignment available only to its enrolled students."}</p>
               <label className="text-sm font-semibold text-cert-ink">Assignment title<input value={assignmentForm.title} onChange={(e) => setAssignmentForm({ ...assignmentForm, title: e.target.value })} placeholder="For example: Build a Python calculator" className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label>
-              <label className="text-sm font-semibold text-cert-ink">Instructions<textarea value={assignmentForm.description} onChange={(e) => setAssignmentForm({ ...assignmentForm, description: e.target.value })} placeholder="Explain what students need to complete and submit." className="mt-2 min-h-32 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" /></label>
+              <label className="text-sm font-semibold text-cert-ink">Instructions<textarea value={assignmentForm.description} onChange={(e) => setAssignmentForm({ ...assignmentForm, description: e.target.value })} placeholder={"Objective: What learners will achieve\nDataset / Requirements: Files, tools, or constraints\nTasks:\n1. First task\n2. Second task\nExpected Output: What to submit"} className="mt-2 min-h-40 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" /></label>
               <label className="text-sm font-semibold text-cert-ink">Due date<input type="date" value={assignmentForm.dueDate} onChange={(e) => setAssignmentForm({ ...assignmentForm, dueDate: e.target.value })} className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" /></label>
               <button className="mt-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[linear-gradient(135deg,#0d8f55_0%,#31c96f_100%)] px-4 py-3.5 font-semibold text-cert-ink shadow-[0_16px_28px_-18px_rgba(13,143,85,0.7)] transition hover:brightness-105"><Plus size={18} /> Create assignment</button>
             </div>
@@ -545,7 +588,7 @@ export default function TrainerDashboard() {
                     </div>
                     <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-cert-green-dark">{assignment.status || "active"}</span>
                   </div>
-                  {assignment.description && <p className="mt-3 text-sm leading-6 text-slate-600">{assignment.description}</p>}
+                  {assignment.description && <TaskInstructions description={assignment.description} />}
                 </article>)}</div>
               </div>)}
             </div>
@@ -567,7 +610,7 @@ export default function TrainerDashboard() {
                 <p className="text-sm leading-5 text-slate-600">{projectForm.courseId ? <>This project will be sent to <strong className="text-cert-ink">all {enrolledStudentIds(projectForm.courseId).length} enrolled students</strong>.</> : "Select a course to see how many students will receive this project."}</p>
               </div>
               <label className="text-sm font-semibold text-cert-ink">Project title<input value={projectForm.title} onChange={(e) => setProjectForm({ ...projectForm, title: e.target.value })} placeholder="For example: Build an automation workflow" className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label>
-              <label className="text-sm font-semibold text-cert-ink">Project instructions<textarea value={projectForm.description} onChange={(e) => setProjectForm({ ...projectForm, description: e.target.value })} placeholder="Describe the outcome, requirements, and what students should submit." className="mt-2 min-h-32 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" /></label>
+              <label className="text-sm font-semibold text-cert-ink">Project instructions<textarea value={projectForm.description} onChange={(e) => setProjectForm({ ...projectForm, description: e.target.value })} placeholder={"Objective: What learners will build\nRequirements: Tools, data, or constraints\nTasks:\n1. First task\n2. Second task\nExpected Output: Repository, document, or file to submit"} className="mt-2 min-h-40 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" /></label>
               <button className="mt-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[linear-gradient(135deg,#0d8f55_0%,#31c96f_100%)] px-4 py-3.5 font-semibold text-cert-ink shadow-[0_16px_28px_-18px_rgba(13,143,85,0.7)] transition hover:brightness-105"><Plus size={18} /> Assign project to all students</button>
             </div>
           </form>}
@@ -587,7 +630,7 @@ export default function TrainerDashboard() {
                   <div><p className="font-semibold text-cert-ink">{titleFor(project, "Project")}</p><p className="mt-1 text-sm text-slate-600">{titleFor(courseById.get(String(project.course_id)), "Course")}</p></div>
                   <span className="rounded-full bg-cert-mint px-3 py-1 text-xs font-bold text-cert-green-dark">{formatAssignedDate(project.assignedAt)}</span>
                 </div>
-                {project.description && <p className="mt-3 text-sm leading-6 text-slate-600">{project.description}</p>}
+                {project.description && <TaskInstructions description={project.description} />}
                 <div className="mt-4 flex items-center gap-2 border-t border-cert-line pt-3 text-sm font-semibold text-cert-ink"><UsersRound size={16} className="text-cert-green-dark" /> {project.studentIds.size} {project.studentIds.size === 1 ? "student" : "students"} assigned</div>
               </article>)}
             </div>
