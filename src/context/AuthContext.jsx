@@ -39,9 +39,17 @@ const syncProfileFromMetadata = async (profileData, sessionUser) => {
     return profileData;
   }
 
+  // A registration starts with pending Auth metadata. Once an administrator
+  // has approved or rejected the profile, that persisted decision must win
+  // over the initial metadata during the student's next sign-in.
+  const storedStatus = (profileData?.status || "").toLowerCase();
+  const status = metadataStatus === "pending" && ["active", "approved", "rejected"].includes(storedStatus)
+    ? storedStatus
+    : metadataStatus || storedStatus || "active";
+
   const updates = {
     role: metadataRole,
-    status: metadataStatus || profileData?.status || "active",
+    status,
     full_name: metadata.full_name || profileData.full_name,
     email: metadata.registered_email || metadata.email || profileData.email || sessionUser.email,
     auth_email: sessionUser.email,

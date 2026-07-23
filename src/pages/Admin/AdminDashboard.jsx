@@ -480,6 +480,7 @@ export default function AdminDashboard() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [saving, setSaving] = useState(false);
+  const [approvalCredentials, setApprovalCredentials] = useState(null);
 
   const [requests, setRequests] = useState([]);
   const [trainers, setTrainers] = useState([]);
@@ -784,6 +785,24 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     loadData();
+  }, []);
+
+  useEffect(() => {
+    // A student registration is created by an Edge Function, so this admin
+    // page needs its own refresh signal rather than waiting for a navigation
+    // or a manual browser reload. The interval is a fallback for projects
+    // where the realtime publication has not been enabled yet.
+    const refreshRequests = () => { loadData(); };
+    const channel = supabase
+      .channel("admin-access-request-updates")
+      .on("postgres_changes", { event: "*", schema: "public", table: "access_requests" }, refreshRequests)
+      .subscribe();
+    const refreshTimer = window.setInterval(refreshRequests, 30000);
+
+    return () => {
+      window.clearInterval(refreshTimer);
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const courseNameById = useMemo(
@@ -1102,6 +1121,7 @@ export default function AdminDashboard() {
     setSaving(true);
     setError("");
     setSuccess("");
+    setApprovalCredentials(null);
 
     const rawStudentLoginId = firstValue(request.student_id, request.student_login_id);
     const studentLoginId = normalizeStudentId(rawStudentLoginId);
@@ -1114,21 +1134,65 @@ export default function AdminDashboard() {
       return;
     }
 
-    const { data, error: approvalError } = await supabase.functions.invoke("approve-student-registration", {
-      body: {
-        requestId: request.id,
-        requestSource: request.source,
-        profileId: firstValue(request.profile_id, request.user_id),
-        studentId: studentLoginId,
-        name: studentName,
-        email: studentEmail,
-        authEmail: request.auth_email,
-      },
-    });
-    if (approvalError || data?.error) setError(data?.error || approvalError?.message || "Unable to approve the student.");
-    else setSuccess(data?.emailError || data?.message || "Student request approved and credentials sent to student email.");
-    setSaving(false);
-    await loadData();
+    try {
+      const { data, error: approvalError } = await supabase.functions.invoke("approve-student-registration", {
+        body: {
+          requestId: request.id,
+          requestSource: request.source,
+          profileId: firstValue(request.profile_id, request.user_id),
+          studentId: studentLoginId,
+          name: studentName,
+          email: studentEmail,
+          authEmail: request.auth_email,
+        },
+      });
+
+      if (approvalError || data?.error) {
+        setError(data?.error || approvalError?.message || "Unable to approve the student.");
+      } else {
+        // The edge function activates the account. Update the request here as
+        // well so an older deployed function (or a schema without updated_at)
+        // cannot leave an already-approved student in the pending list.
+        let requestUpdate = { data: null };
+        if (request.source === "access_requests") {
+          requestUpdate = await safeUpdate("access_requests", request.id, {
+            status: "approved",
+            updated_at: new Date().toISOString(),
+          });
+
+          if (requestUpdate.error && hasServiceRoleKey) {
+            requestUpdate = await serviceRoleTableRequest(
+              "access_requests",
+              `?id=eq.${encodeURIComponent(request.id)}&select=*`,
+              "PATCH",
+              { status: "approved", updated_at: new Date().toISOString() }
+            );
+          }
+        }
+
+        if (requestUpdate.error) {
+          setError(requestUpdate.error.message || "The student account was approved, but the request could not be marked as approved.");
+        } else {
+          setRequests((current) => current.filter((item) => !(item.source === request.source && String(item.id) === String(request.id))));
+          if (data?.emailError) {
+            setSuccess("Student request approved, but email delivery failed. Share the temporary credentials below with the student.");
+            setApprovalCredentials({
+              name: studentName,
+              studentId: data.studentId || studentLoginId,
+              temporaryPassword: data.temporaryPassword || "Unavailable",
+              emailError: data.emailError,
+            });
+          } else {
+            setSuccess(data?.message || "Student request approved and credentials sent to student email.");
+          }
+        }
+      }
+    } catch (approvalError) {
+      setError(approvalError instanceof Error ? approvalError.message : "Unable to contact the approval service. Please try again.");
+    } finally {
+      setSaving(false);
+      await loadData();
+    }
   };
 
   const rejectRequest = async (request) => {
@@ -1136,59 +1200,76 @@ export default function AdminDashboard() {
     setError("");
     setSuccess("");
 
-    const profileId = firstValue(request.profile_id, request.user_id, request.id);
+    // An access request can exist without a profile record (for example from
+    // an older registration flow). Its request ID must never be used as a
+    // profile ID, otherwise an upsert attempts to create an incomplete profile.
+    const profileId = firstValue(request.profile_id, request.user_id);
 
-    if (hasServiceRoleKey && profileId) {
-      const authRejectResult = await serviceRoleAuthRequest(`/users/${profileId}`, "PUT", {
-        user_metadata: {
-          full_name: firstValue(request.full_name, request.name),
-          registered_email: request.email,
-          student_id: firstValue(request.student_id, request.student_login_id),
-          role: "student",
+    try {
+      // The request decision is the primary action. Complete it before the
+      // optional auth/profile metadata sync so an RLS restriction on profiles
+      // cannot leave a rejected request visible as pending.
+      if (request.source === "access_requests") {
+        let result = await safeUpdate("access_requests", request.id, {
           status: "rejected",
-        },
-      });
+          updated_at: new Date().toISOString(),
+        });
 
-      if (authRejectResult.error) {
-        setSaving(false);
-        setError(getDbErrorMessage(authRejectResult.error, "Unable to reject request."));
-        return;
+        if (result.error && hasServiceRoleKey) {
+          result = await serviceRoleTableRequest(
+            "access_requests",
+            `?id=eq.${encodeURIComponent(request.id)}&select=*`,
+            "PATCH",
+            { status: "rejected", updated_at: new Date().toISOString() }
+          );
+        }
+
+        if (result.error) {
+          setError(result.error.message || "Unable to reject request.");
+          return;
+        }
       }
-    }
 
-    if (request.source === "access_requests") {
-      const result = await safeUpdate("access_requests", request.id, {
-        status: "rejected",
-        updated_at: new Date().toISOString(),
-      });
-      if (result.error) {
-        setSaving(false);
-        setError(result.error.message || "Unable to reject request.");
-        return;
+      setRequests((current) => current.filter((item) => !(item.source === request.source && String(item.id) === String(request.id))));
+
+      // These updates keep the rejected state consistent for future sign-ins,
+      // but the already-completed request decision must not be rolled back if
+      // an older database does not permit one of them.
+      if (profileId) {
+        let profileResult = await safeUpdate("profiles", profileId, { role: "student", status: "rejected" });
+        if (profileResult.error && hasServiceRoleKey) {
+          profileResult = await serviceRoleTableRequest(
+            "profiles",
+            `?id=eq.${encodeURIComponent(profileId)}&select=*`,
+            "PATCH",
+            { role: "student", status: "rejected" }
+          );
+        }
+        if (profileResult.error && !isStackDepthError(profileResult.error)) {
+          console.warn("Rejected request profile sync failed:", profileResult.error);
+        }
       }
-    }
 
-    if (profileId) {
-      const profileResult = await safeUpsert(
-        "profiles",
-        {
-          id: profileId,
-          role: "student",
-          status: "rejected",
-        },
-        "id"
-      );
-
-      if (profileResult.error && !isStackDepthError(profileResult.error)) {
-        setSaving(false);
-        setError(profileResult.error.message || "Unable to reject request.");
-        return;
+      if (hasServiceRoleKey && profileId) {
+        const authRejectResult = await serviceRoleAuthRequest(`/users/${profileId}`, "PUT", {
+          user_metadata: {
+            full_name: firstValue(request.full_name, request.name),
+            registered_email: request.email,
+            student_id: firstValue(request.student_id, request.student_login_id),
+            role: "student",
+            status: "rejected",
+          },
+        });
+        if (authRejectResult.error) console.warn("Rejected request auth sync failed:", authRejectResult.error);
       }
-    }
 
-    setSuccess("Student request rejected.");
-    setSaving(false);
-    await loadData();
+      setSuccess("Student request rejected.");
+    } catch (rejectError) {
+      setError(rejectError instanceof Error ? rejectError.message : "Unable to reject request.");
+    } finally {
+      setSaving(false);
+      await loadData();
+    }
   };
 
   const createTrainer = async (event) => {
@@ -1952,6 +2033,7 @@ export default function AdminDashboard() {
           <section className="space-y-3">
             {error && <p className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
             {success && <p className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</p>}
+            {approvalCredentials && <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><p className="font-semibold">Email was not delivered to {approvalCredentials.name}.</p><p className="mt-1">Student ID: <span className="font-bold">{approvalCredentials.studentId}</span></p><p>Temporary password: <span className="font-bold">{approvalCredentials.temporaryPassword}</span></p><p className="mt-2 text-amber-800">Email error: {approvalCredentials.emailError}</p></div>}
           </section>
         )}
 
@@ -2002,7 +2084,7 @@ export default function AdminDashboard() {
                         onClick={() => approveRequest(request)}
                         className="rounded-xl bg-cert-green px-4 py-2.5 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white disabled:opacity-70"
                       >
-                        Approve
+                        {saving ? "Approving..." : "Approve"}
                       </button>
                       <button
                         type="button"

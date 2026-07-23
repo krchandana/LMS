@@ -22,6 +22,58 @@ const certificateCompanyName = "CERTISURED LEARNING MANAGEMENT SYSTEM";
 const titleFor = (item, fallback = "Untitled") =>
   item?.title || item?.name || item?.course_name || item?.project_name || item?.assignment_name || item?.full_name || fallback;
 
+// Trainers can enter a brief or a fully structured brief.  Keep the latter
+// readable for students by recognizing the labels used in the task builder.
+const instructionLabels = "Objective|Dataset(?:\\s+(?:Columns|Requirements))?|Requirements?|Tasks?|Expected Output|Deliverables?|Steps?|Code";
+const instructionHeadingPattern = new RegExp(`(?:^|\\n\\n)(${instructionLabels}):\\s*`, "gi");
+
+const formatTaskDescription = (value) => {
+  const text = String(value || "").trim();
+  if (!text) return "";
+
+  return text
+    .replace(new RegExp(`\\s*(${instructionLabels})\\s*:?\\s*`, "gi"), (_, label, offset) => `${offset ? "\\n\\n" : ""}${label.replace(/\\b\\w/g, (letter) => letter.toUpperCase())}: `)
+    .replace(/\\s+(\\d+[.)])\\s+/g, "\\n$1 ")
+    .trim();
+};
+
+const taskInstructionSections = (description) => {
+  const formatted = formatTaskDescription(description);
+  if (!formatted) return [];
+
+  const headings = [...formatted.matchAll(instructionHeadingPattern)];
+  if (!headings.length) return [{ label: "Instructions", content: formatted }];
+
+  return headings.map((heading, index) => ({
+    label: heading[1],
+    content: formatted.slice((heading.index || 0) + heading[0].length, index + 1 < headings.length ? headings[index + 1].index : undefined).trim(),
+  })).filter((section) => section.content);
+};
+
+const TaskInstructions = ({ description }) => {
+  const sections = taskInstructionSections(description);
+  if (!sections.length) return null;
+
+  return (
+    <div className="mt-4 space-y-3">
+      {sections.map((section) => {
+        const steps = section.label.toLowerCase().startsWith("task") || section.label.toLowerCase().startsWith("step")
+          ? section.content.split(/(?:^|\n)(?:\d+[.)]|[-•])\s+/).filter(Boolean)
+          : [];
+
+        return (
+          <section key={section.label} className="rounded-xl border border-cert-line bg-cert-mint/60 p-3.5">
+            <p className="text-xs font-bold uppercase tracking-[0.14em] text-cert-green-dark">{section.label}</p>
+            {steps.length > 1
+              ? <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm leading-6 text-slate-600">{steps.map((step, index) => <li key={`${section.label}-${index}`}>{step}</li>)}</ol>
+              : <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">{section.content}</p>}
+          </section>
+        );
+      })}
+    </div>
+  );
+};
+
 const normalizeStatus = (status) => {
   const value = (status || "pending").toLowerCase();
   if (value === "rework") return "rejected";
@@ -715,7 +767,7 @@ export default function StudentDashboard() {
             <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${isApproved ? "bg-emerald-50 text-emerald-600" : isSubmitted ? "bg-sky-50 text-sky-600" : "bg-cert-mint text-cert-green-dark"}`}><Target size={19} aria-hidden="true" /></span>
             <div className="min-w-0 flex-1"><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold leading-6 text-cert-ink">{titleFor(task, "Task")}</h3><p className="mt-1 text-xs font-medium text-slate-500">{titleFor(course, "Course")}</p></div><span className={`rounded-full px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] ${statusStyles[task.status] || (task.status === "active" ? "bg-sky-100 text-sky-700" : "bg-slate-200 text-slate-700")}`}>{task.status === "active" ? "To do" : task.status}</span></div></div>
           </div>
-          {task.description && <p className="mt-4 line-clamp-2 text-sm leading-6 text-slate-600">{task.description}</p>}
+          {task.description && <TaskInstructions description={task.description} />}
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3"><p className="text-xs font-medium text-slate-500">{task.due_date ? <>Due <span className="font-semibold text-cert-ink">{task.due_date}</span></> : "No due date"}</p>{canSubmit && <button type="button" onClick={() => openSubmitForm(task)} className="rounded-xl bg-cert-green px-4 py-2 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">{task.status === "rejected" ? "Submit revision" : "Submit work"}</button>}{isSubmitted && <p className="text-xs font-semibold text-sky-700">Waiting for review</p>}{isApproved && <p className="text-xs font-semibold text-emerald-700">Completed</p>}</div>
         </div>
       </article>

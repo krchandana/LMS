@@ -89,6 +89,14 @@ const findTrainerEmailByName = async (trainerName) => {
   if (!normalized) return null;
 
   try {
+    // This RPC is intentionally available before sign-in. It bypasses profile
+    // RLS only for this exact trainer-name-to-email lookup, so name login works
+    // just as reliably on a new phone as it does in an existing admin session.
+    const { data: rpcEmail, error: rpcError } = await supabase.rpc("find_trainer_login_email", {
+      p_full_name: normalized,
+    });
+    if (!rpcError && typeof rpcEmail === "string" && rpcEmail.trim()) return rpcEmail.trim();
+
     const profileEmail = await queryTrainerEmailInTable("profiles", normalized, true);
     if (profileEmail) return profileEmail;
     const trainerEmail = await queryTrainerEmailInTable("trainers", normalized, false);
@@ -311,17 +319,19 @@ const LoginPage = () => {
     }
 
     setIsResetting(true);
-    let trainerEmail;
-    try {
-      trainerEmail = await findTrainerEmailByName(trainerName);
-    } catch (err) {
-      setError(err?.message || "Unable to look up the trainer account.");
-      setIsResetting(false);
-      return;
+    let trainerEmail = trainerName.includes("@") ? trainerName.toLowerCase() : null;
+    if (!trainerEmail) {
+      try {
+        trainerEmail = await findTrainerEmailByName(trainerName);
+      } catch (err) {
+        setError(err?.message || "Unable to look up the trainer account.");
+        setIsResetting(false);
+        return;
+      }
     }
 
     if (!trainerEmail) {
-      setError("Trainer not found. Please use the full name saved by admin.");
+      setError("Trainer not found. Use the name saved by admin or your registered email.");
       setIsResetting(false);
       return;
     }
@@ -387,22 +397,26 @@ const LoginPage = () => {
     }
 
     if (role === "trainer") {
-      let trainerEmail;
-      try {
-        trainerEmail = await findTrainerEmailByName(emailToUse);
-      } catch (err) {
-        setError(err?.message || "Unable to look up the trainer account.");
-        setIsSubmitting(false);
-        return;
-      }
+      if (emailToUse.includes("@")) {
+        emailToUse = emailToUse.toLowerCase();
+      } else {
+        let trainerEmail;
+        try {
+          trainerEmail = await findTrainerEmailByName(emailToUse);
+        } catch (err) {
+          setError(err?.message || "Unable to look up the trainer account.");
+          setIsSubmitting(false);
+          return;
+        }
 
-      if (!trainerEmail) {
-        setError("Trainer not found. Please use the full name saved by admin.");
-        setIsSubmitting(false);
-        return;
-      }
+        if (!trainerEmail) {
+          setError("Trainer not found. Use the name saved by admin or your registered email.");
+          setIsSubmitting(false);
+          return;
+        }
 
-      emailToUse = trainerEmail;
+        emailToUse = trainerEmail;
+      }
     }
 
     if (role === "student") {
@@ -664,18 +678,18 @@ const LoginPage = () => {
               )}
               <div>
                 <label className="block text-sm font-medium text-slate-700">
-                  {role === "trainer" ? "Full name" : role === "student" && studentMode !== "register" ? "Student ID" : "Email"}
+                  {role === "trainer" ? "Full name or email" : role === "student" && studentMode !== "register" ? "Student ID" : "Email"}
                 </label>
                 <input
                   type={role === "student" && studentMode !== "register" ? "text" : role === "trainer" ? "text" : "email"}
                   value={role === "student" && studentMode === "register" ? studentEmail : credential}
                   onChange={(e) => role === "student" && studentMode === "register" ? setStudentEmail(e.target.value) : setCredential(e.target.value)}
-                  placeholder={role === "student" && studentMode !== "register" ? "Example: STU12345678" : role === "trainer" ? "Enter your full name" : "your@email.com"}
+                  placeholder={role === "student" && studentMode !== "register" ? "Example: STU12345678" : role === "trainer" ? "Enter your full name or email" : "your@email.com"}
                   className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-cert-ink outline-none transition focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
                   required
                 />
                 {role === "trainer" && (
-                  <p className="mt-2 text-sm text-slate-500">Use the full name saved by admin when your account was created.</p>
+                  <p className="mt-2 text-sm text-slate-500">Use the name saved by admin, or enter your registered email.</p>
                 )}
               </div>
               {(role !== "student" || (studentMode !== "reset" && studentMode !== "register")) && (

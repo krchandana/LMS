@@ -10,7 +10,8 @@ const corsHeaders = {
 const text = (value: unknown) => (typeof value === "string" ? value.trim() : "");
 const studentEmail = (studentId: string) => `${studentId.toLowerCase()}@student.local`;
 const password = () => `Stud@${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
-const missingColumn = (error: { message?: string } | null) => error?.message?.match(/column "([^"]+)"/i)?.[1] || "";
+const missingColumn = (error: { message?: string } | null) =>
+  error?.message?.match(/column "([^"]+)"/i)?.[1] || error?.message?.match(/'([^']+)' column/i)?.[1] || "";
 
 const upsertProfile = async (client: ReturnType<typeof createClient>, payload: Record<string, unknown>) => {
   let nextPayload = { ...payload };
@@ -22,6 +23,40 @@ const upsertProfile = async (client: ReturnType<typeof createClient>, payload: R
     delete nextPayload[column];
   }
   return { message: "Unable to activate the student profile." };
+};
+
+const approveAccessRequest = async (client: ReturnType<typeof createClient>, requestId: string, email: string) => {
+  let payload: Record<string, unknown> = { status: "approved", updated_at: new Date().toISOString() };
+
+  const updateRequest = async (column: "id" | "email", value: string) => {
+    let nextPayload = { ...payload };
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const { data, error } = await client.from("access_requests").update(nextPayload).eq(column, value).eq("status", "pending").select("id");
+      if (!error) return { updated: Boolean(data?.length) };
+
+      const missing = missingColumn(error);
+      if (!missing || !(missing in nextPayload)) return { error };
+      delete nextPayload[missing];
+    }
+    return { error: { message: "Unable to mark the access request as approved." } };
+  };
+
+  if (requestId) {
+    const byId = await updateRequest("id", requestId);
+    if (byId.error) return byId.error;
+    if (byId.updated) return null;
+  }
+
+  // Older request cards can carry a stale/missing id. Email is unique for an
+  // access request, so it is a safe fallback to prevent an active learner
+  // from remaining in the pending queue.
+  if (email) {
+    const byEmail = await updateRequest("email", email);
+    if (byEmail.error) return byEmail.error;
+    if (byEmail.updated) return null;
+  }
+
+  return { message: "No pending access request was found to approve." };
 };
 
 serve(async (req) => {
@@ -45,7 +80,6 @@ serve(async (req) => {
     const email = text(body.email).toLowerCase();
     let id = text(body.studentId).toUpperCase();
     const requestId = text(body.requestId);
-    const requestSource = text(body.requestSource);
     let profileId = text(body.profileId);
     if (!name || !email) return Response.json({ error: "Student name and email are required." }, { status: 400, headers: corsHeaders });
 
@@ -78,9 +112,9 @@ serve(async (req) => {
     });
     if (profileError) throw profileError;
 
-    if (requestSource === "access_requests" && requestId) {
-      const { error } = await admin.from("access_requests").update({ status: "approved", updated_at: new Date().toISOString() }).eq("id", requestId);
-      if (error) throw error;
+    if (requestId || email) {
+      const requestError = await approveAccessRequest(admin, requestId, email);
+      if (requestError) throw requestError;
     }
 
     const mailResponse = await fetch(`${supabaseUrl}/functions/v1/send-email`, {
@@ -89,7 +123,14 @@ serve(async (req) => {
       body: JSON.stringify({ email, name, studentId: id, password: nextPassword }),
     });
     const mailData = await mailResponse.json().catch(() => ({}));
-    if (!mailResponse.ok) return Response.json({ ok: true, emailError: mailData.error || "Student activated, but email delivery failed." }, { headers: corsHeaders });
+    if (!mailResponse.ok) {
+      return Response.json({
+        ok: true,
+        emailError: mailData.error || "Student activated, but email delivery failed.",
+        studentId: id,
+        temporaryPassword: nextPassword,
+      }, { headers: corsHeaders });
+    }
 
     return Response.json({ ok: true, message: "Student request approved and credentials sent to student email." }, { headers: corsHeaders });
   } catch (error) {

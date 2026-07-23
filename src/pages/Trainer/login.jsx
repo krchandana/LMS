@@ -73,6 +73,11 @@ const findTrainerEmailByName = async (trainerName) => {
   if (!normalized) return null;
 
   try {
+    const { data: rpcEmail, error: rpcError } = await supabase.rpc("find_trainer_login_email", {
+      p_full_name: normalized,
+    });
+    if (!rpcError && typeof rpcEmail === "string" && rpcEmail.trim()) return rpcEmail.trim();
+
     const profileEmail = await queryTrainerEmailInTable("profiles", normalized, true);
     if (profileEmail) return profileEmail;
 
@@ -125,18 +130,20 @@ const TrainerLogin = () => {
       return;
     }
 
-    let trainerEmail;
-    try {
-      trainerEmail = await findTrainerEmailByName(normalizedId);
-    } catch (err) {
-      setError(err?.message || "Unable to look up the trainer account.");
-      setIsSubmitting(false);
-      return;
-    }
+    let trainerEmail = normalizedId.includes("@") ? normalizedId.toLowerCase() : null;
     if (!trainerEmail) {
-      setError("Trainer not found. Please use the full name saved by admin.");
-      setIsSubmitting(false);
-      return;
+      try {
+        trainerEmail = await findTrainerEmailByName(normalizedId);
+      } catch (err) {
+        setError(err?.message || "Unable to look up the trainer account.");
+        setIsSubmitting(false);
+        return;
+      }
+      if (!trainerEmail) {
+        setError("Trainer not found. Use the name saved by admin or your registered email.");
+        setIsSubmitting(false);
+        return;
+      }
     }
 
     const { error: signInError } = await supabase.auth.signInWithPassword({
@@ -166,17 +173,19 @@ const TrainerLogin = () => {
 
     setIsResetting(true);
 
-    let trainerEmail;
-    try {
-      trainerEmail = await findTrainerEmailByName(normalizedId);
-    } catch (err) {
-      setError(err?.message || "Unable to look up the trainer account.");
-      setIsResetting(false);
-      return;
+    let trainerEmail = normalizedId.includes("@") ? normalizedId.toLowerCase() : null;
+    if (!trainerEmail) {
+      try {
+        trainerEmail = await findTrainerEmailByName(normalizedId);
+      } catch (err) {
+        setError(err?.message || "Unable to look up the trainer account.");
+        setIsResetting(false);
+        return;
+      }
     }
 
     if (!trainerEmail) {
-      setError("Trainer not found. Please use the full name saved by admin.");
+      setError("Trainer not found. Use the name saved by admin or your registered email.");
       setIsResetting(false);
       return;
     }
@@ -236,16 +245,16 @@ const TrainerLogin = () => {
 
             <form onSubmit={handleLogin} className="mt-8 space-y-5">
               <div>
-                <label className="mb-2 block text-sm font-medium text-cert-ink">Full name</label>
+                <label className="mb-2 block text-sm font-medium text-cert-ink">Full name or email</label>
                 <input
                   type="text"
-                  placeholder="Enter your full name"
+                  placeholder="Enter your full name or email"
                   value={trainerName}
                   onChange={(e) => setTrainerName(e.target.value)}
                   className="w-full rounded-3xl border border-cert-line bg-cert-mint px-4 py-3 text-cert-ink outline-none focus:border-cert-green focus:ring-2 focus:ring-cert-green/20"
                   required
                 />
-                <p className="mt-2 text-sm text-slate-500">Use the full name saved by admin when your account was created.</p>
+                <p className="mt-2 text-sm text-slate-500">Use the name saved by admin, or enter your registered email.</p>
               </div>
 
               <div>
