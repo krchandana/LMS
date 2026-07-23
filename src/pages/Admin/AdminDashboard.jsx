@@ -1100,22 +1100,10 @@ export default function AdminDashboard() {
     setError("");
     setSuccess("");
 
-    let profileId = firstValue(request.profile_id, request.user_id);
     const rawStudentLoginId = firstValue(request.student_id, request.student_login_id);
-    let studentLoginId = normalizeStudentId(rawStudentLoginId);
-    if (!studentLoginId) {
-      try {
-        studentLoginId = await nextStudentLoginId();
-      } catch (err) {
-        setSaving(false);
-        setError(err?.message || "Unable to generate the next student ID.");
-        return;
-      }
-    }
+    const studentLoginId = normalizeStudentId(rawStudentLoginId);
     const studentName = firstValue(request.full_name, request.name, request.email, "Student");
     const studentEmail = (request.email || "").trim();
-    const authEmail = firstValue(request.auth_email, studentAuthEmailFor(studentLoginId));
-    const nextPassword = generateStudentPassword();
 
     if (!studentEmail) {
       setSaving(false);
@@ -1123,124 +1111,19 @@ export default function AdminDashboard() {
       return;
     }
 
-    if (hasServiceRoleKey) {
-      const listResult = await serviceRoleAuthRequest("/users?page=1&per_page=1000", "GET");
-      if (listResult.error) {
-        setSaving(false);
-        setError(getDbErrorMessage(listResult.error, "Unable to look up the student login account."));
-        return;
-      }
-
-      const existingUser = (listResult.data?.users || []).find((user) =>
-        user.id === profileId ||
-        (user.email || "").toLowerCase() === authEmail.toLowerCase() ||
-        (user.email || "").toLowerCase() === studentEmail.toLowerCase() ||
-        (user.user_metadata?.registered_email || "").toLowerCase() === studentEmail.toLowerCase()
-      );
-      const authPayload = {
-        email: authEmail,
-        password: nextPassword,
-        email_confirm: true,
-        user_metadata: {
-          full_name: studentName,
-          registered_email: studentEmail,
-          student_id: studentLoginId,
-          role: "student",
-          status: "active",
-        },
-      };
-      const authResult = existingUser?.id
-        ? await serviceRoleAuthRequest(`/users/${existingUser.id}`, "PUT", authPayload)
-        : await serviceRoleAuthRequest("/users", "POST", authPayload);
-
-      if (authResult.error) {
-        setSaving(false);
-        setError(getDbErrorMessage(authResult.error, "Unable to prepare student login account."));
-        return;
-      }
-
-      profileId = authResult.data?.user?.id || authResult.data?.id || existingUser?.id || profileId;
-    }
-
-    if (!profileId) {
-      setSaving(false);
-      setError("Unable to create the student login account. Configure the Supabase service role key and try again.");
-      return;
-    }
-
-    let profileSyncWarning = false;
-
-    const profilePayload = {
-      id: profileId,
-      email: studentEmail,
-      auth_email: authEmail,
-      full_name: studentName,
-      role: "student",
-      status: "active",
-      student_id: studentLoginId,
-      student_login_id: studentLoginId,
-    };
-
-    let profileResult = await safeUpsert(
-      "profiles",
-      profilePayload,
-      "id"
-    );
-
-    // Older requests can already have a profile under a different Auth id.
-    // Reuse that row instead of violating the unique email constraint.
-    if ((profileResult.error?.message || "").includes("profiles_email_key")) {
-      const existingProfileResult = await findProfileByEmail(studentEmail);
-      if (existingProfileResult.data?.id) {
-        profileResult = await safeUpsert(
-          "profiles",
-          { ...profilePayload, id: existingProfileResult.data.id },
-          "id"
-        );
-      }
-    }
-
-    if (profileResult.error) {
-      if (isStackDepthError(profileResult.error)) {
-        profileSyncWarning = true;
-      } else {
-        setSaving(false);
-        setError(profileResult.error.message || "Unable to activate student profile.");
-        return;
-      }
-    }
-
-    if (request.source === "access_requests") {
-      const result = await safeUpdate("access_requests", request.id, {
-        status: "approved",
-        updated_at: new Date().toISOString(),
-      });
-      if (result.error) {
-        setSaving(false);
-        setError(result.error.message || "Unable to approve request.");
-        return;
-      }
-    }
-
-    const emailResult = await sendStudentApprovalEmail({
-      email: studentEmail,
-      name: studentName,
-      studentId: studentLoginId,
-      password: nextPassword,
+    const { data, error: approvalError } = await supabase.functions.invoke("approve-student-registration", {
+      body: {
+        requestId: request.id,
+        requestSource: request.source,
+        profileId: firstValue(request.profile_id, request.user_id),
+        studentId: studentLoginId,
+        name: studentName,
+        email: studentEmail,
+        authEmail: request.auth_email,
+      },
     });
-
-    if (emailResult.error) {
-      setSuccess("Student approved, but email delivery failed. Check SMTP settings in send-email function.");
-      setSaving(false);
-      await loadData();
-      return;
-    }
-
-    if (profileSyncWarning) {
-      setSuccess("Student approved and credentials sent. Profile sync was skipped due database recursion issue.");
-    } else {
-      setSuccess("Student request approved and credentials sent to student email.");
-    }
+    if (approvalError || data?.error) setError(data?.error || approvalError?.message || "Unable to approve the student.");
+    else setSuccess(data?.emailError || data?.message || "Student request approved and credentials sent to student email.");
     setSaving(false);
     await loadData();
   };

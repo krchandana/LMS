@@ -24,3 +24,8 @@ entrypoint = "./functions/send-certificate-email/index.ts"
 enabled = true
 verify_jwt = false
 entrypoint = "./functions/submit-student-registration/index.ts"
+
+[functions.approve-student-registration]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/approve-student-registration/index.ts"
