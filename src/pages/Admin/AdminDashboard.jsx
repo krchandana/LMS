@@ -4,12 +4,15 @@ import {
   Award,
   ChartNoAxesColumn,
   ClipboardList,
+  Clock3,
   GraduationCap,
   Link2,
   LogOut,
   ShieldCheck,
+  Sparkles,
   UserCheck,
   UsersRound,
+  Video,
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
@@ -23,6 +26,7 @@ const tabs = [
   { key: "courses", label: "Courses", path: "/admin/courses" },
   { key: "mapping", label: "Mapping", path: "/admin/mapping", icon: Link2 },
   { key: "certificates", label: "Certificates", path: "/admin/certificates", icon: Award },
+  { key: "insights", label: "AI Insights", path: "/admin/insights", icon: Sparkles },
   { key: "analytics", label: "Analytics", path: "/admin/analytics", icon: ChartNoAxesColumn },
 ];
 
@@ -487,6 +491,9 @@ export default function AdminDashboard() {
   const [studentCourseRows, setStudentCourseRows] = useState([]);
   const [enrollmentRows, setEnrollmentRows] = useState([]);
   const [certificates, setCertificates] = useState([]);
+  const [assignments, setAssignments] = useState([]);
+  const [courseVideos, setCourseVideos] = useState([]);
+  const [attendanceRecords, setAttendanceRecords] = useState([]);
 
   const [trainerName, setTrainerName] = useState("");
   const [trainerEmail, setTrainerEmail] = useState("");
@@ -499,6 +506,8 @@ export default function AdminDashboard() {
   const [courseDuration, setCourseDuration] = useState("");
   const [courseEndDate, setCourseEndDate] = useState("");
   const [courseStatus, setCourseStatus] = useState("active");
+  const [insightQuery, setInsightQuery] = useState("");
+  const [insightAnswer, setInsightAnswer] = useState("");
 
   const [mapStudentIds, setMapStudentIds] = useState([]);
   const [showStudentPicker, setShowStudentPicker] = useState(false);
@@ -518,8 +527,10 @@ export default function AdminDashboard() {
           ? "courses"
           : location.pathname.endsWith("/mapping")
             ? "mapping"
-            : location.pathname.endsWith("/certificates")
+    : location.pathname.endsWith("/certificates")
               ? "certificates"
+              : location.pathname.endsWith("/insights")
+                ? "insights"
             : location.pathname.endsWith("/analytics")
               ? "analytics"
               : location.pathname.endsWith("/admin")
@@ -597,6 +608,35 @@ export default function AdminDashboard() {
 
       const coursesServiceRes = hasServiceRoleKey
         ? await serviceRoleTableRequest("courses", "?select=*&limit=300", "GET")
+        : { data: [], error: null };
+
+      const assignmentsRes = await supabase
+        .from("assignments")
+        .select("*")
+        .limit(2000);
+
+      const assignmentsServiceRes = hasServiceRoleKey
+        ? await serviceRoleTableRequest("assignments", "?select=*&limit=2000", "GET")
+        : { data: [], error: null };
+
+      const courseVideosRes = await supabase
+        .from("course_videos")
+        .select("*")
+        .limit(2000);
+
+      const courseVideosServiceRes = hasServiceRoleKey
+        ? await serviceRoleTableRequest("course_videos", "?select=*&limit=2000", "GET")
+        : { data: [], error: null };
+
+      // Attendance is optional in older LMS databases. A missing table simply
+      // leaves the attendance insight unavailable rather than breaking admin.
+      const attendanceRes = await supabase
+        .from("attendance")
+        .select("*")
+        .limit(5000);
+
+      const attendanceServiceRes = hasServiceRoleKey
+        ? await serviceRoleTableRequest("attendance", "?select=*&limit=5000", "GET")
         : { data: [], error: null };
 
       const studentRes = await supabase
@@ -700,6 +740,15 @@ export default function AdminDashboard() {
       const nextCourses = hasServiceRoleKey && !coursesServiceRes.error
         ? (Array.isArray(coursesServiceRes.data) ? coursesServiceRes.data : [])
         : (coursesRes.error ? [] : (coursesRes.data || []));
+      const nextAssignments = hasServiceRoleKey && !assignmentsServiceRes.error
+        ? (Array.isArray(assignmentsServiceRes.data) ? assignmentsServiceRes.data : [])
+        : (assignmentsRes.error ? [] : (assignmentsRes.data || []));
+      const nextCourseVideos = hasServiceRoleKey && !courseVideosServiceRes.error
+        ? (Array.isArray(courseVideosServiceRes.data) ? courseVideosServiceRes.data : [])
+        : (courseVideosRes.error ? [] : (courseVideosRes.data || []));
+      const nextAttendanceRecords = hasServiceRoleKey && !attendanceServiceRes.error
+        ? (Array.isArray(attendanceServiceRes.data) ? attendanceServiceRes.data : [])
+        : (attendanceRes.error ? [] : (attendanceRes.data || []));
       const nextStudentRecords = studentRes.error ? [] : (studentRes.data || []);
       const nextEnrollmentRows = hasServiceRoleKey && !enrollmentServiceRes.error
         ? (Array.isArray(enrollmentServiceRes.data) ? enrollmentServiceRes.data : [])
@@ -724,6 +773,9 @@ export default function AdminDashboard() {
       setEnrollmentRows(nextEnrollmentRows);
       setStudentCourseRows(nextStudentCourseRows);
       setCertificates(nextCertificates);
+      setAssignments(nextAssignments);
+      setCourseVideos(nextCourseVideos);
+      setAttendanceRecords(nextAttendanceRecords);
     } catch (err) {
       console.error("Data load error:", err);
       setError("Error loading data. Some tables may not exist.");
@@ -943,6 +995,98 @@ export default function AdminDashboard() {
       avgProgress,
     };
   }, [courses, enrichedStudents, requests.length, trainers.length]);
+
+  const monitoringInsights = useMemo(() => {
+    const now = new Date();
+    const activeStudents = enrichedStudents.filter((student) => (student.status || "active").toLowerCase() === "active");
+    const overdueAssignments = assignments.filter((assignment) => {
+      const dueValue = String(assignment.due_date || "");
+      const dueDate = dueValue ? new Date(dueValue.includes("T") ? dueValue : `${dueValue}T23:59:59`) : null;
+      const status = (assignment.status || "").toLowerCase();
+      return dueDate && !Number.isNaN(dueDate.getTime()) && dueDate < now && !["approved", "completed", "cancelled"].includes(status);
+    });
+
+    const attendanceByStudent = new Map();
+    attendanceRecords.forEach((record) => {
+      const studentId = firstValue(record.student_id, record.profile_id, record.user_id);
+      if (!studentId) return;
+      const key = String(studentId);
+      const entry = attendanceByStudent.get(key) || { percentages: [], present: 0, total: 0 };
+      const rawPercentage = firstValue(record.attendance_percent, record.attendance_percentage, record.percentage, record.percent);
+      const percentage = typeof rawPercentage === "number" ? rawPercentage : Number.parseFloat(rawPercentage);
+      if (Number.isFinite(percentage)) {
+        entry.percentages.push(percentage);
+      } else {
+        const status = String(firstValue(record.status, record.attendance_status, "")).toLowerCase();
+        entry.total += 1;
+        if (["present", "late"].includes(status)) entry.present += 1;
+      }
+      attendanceByStudent.set(key, entry);
+    });
+
+    const studentAttendance = enrichedStudents.map((student) => {
+      const entry = attendanceByStudent.get(String(student.id));
+      if (!entry) return { student, percentage: null };
+      const percentage = entry.percentages.length
+        ? Math.round(entry.percentages.reduce((total, value) => total + value, 0) / entry.percentages.length)
+        : entry.total ? Math.round((entry.present / entry.total) * 100) : null;
+      return { student, percentage };
+    });
+    const lowAttendanceStudents = studentAttendance.filter(({ percentage }) => percentage !== null && percentage < 75);
+
+    const completionByCourse = courses.map((course) => {
+      const enrolledStudents = enrichedStudents.filter((student) =>
+        student.enrolled_courses?.some((enrollment) => String(enrollment.course_id) === String(course.id))
+      );
+      const completionRate = enrolledStudents.length
+        ? Math.round(enrolledStudents.reduce((total, student) => total + (student.progress || 0), 0) / enrolledStudents.length)
+        : null;
+      return {
+        id: course.id,
+        name: firstValue(course.title, course.name, course.course_name, "Untitled course"),
+        completionRate,
+        enrolled: enrolledStudents.length,
+      };
+    });
+    const measuredCourses = completionByCourse.filter((course) => course.completionRate !== null);
+    const lowestCompletionCourse = measuredCourses.length
+      ? [...measuredCourses].sort((first, second) => first.completionRate - second.completionRate)[0]
+      : null;
+    const lowCompletionCourses = measuredCourses.filter((course) => course.completionRate < 50);
+
+    const videosByCourse = new Set(courseVideos.map((video) => String(video.course_id)).filter(Boolean));
+    const trainerCourses = new Map();
+    courses.forEach((course) => {
+      if (!course.trainer_id) return;
+      const trainerId = String(course.trainer_id);
+      trainerCourses.set(trainerId, [...(trainerCourses.get(trainerId) || []), course]);
+    });
+    const trainersWithoutContent = Array.from(trainerCourses.entries())
+      .filter(([, trainerCourses]) => trainerCourses.every((course) => !videosByCourse.has(String(course.id))))
+      .map(([trainerId, trainerCourses]) => ({
+        id: trainerId,
+        name: trainerNameById.get(trainerId) || "Unknown trainer",
+        courses: trainerCourses.map((course) => firstValue(course.title, course.name, course.course_name, "Untitled course")),
+      }));
+
+    const lowProgressStudents = enrichedStudents.filter((student) => student.progress < 50);
+    const studentsNeedingAttention = new Map();
+    [...lowProgressStudents, ...lowAttendanceStudents.map(({ student }) => student)].forEach((student) => studentsNeedingAttention.set(String(student.id), student));
+    const inactiveTrainers = trainers.filter((trainer) => (trainer.status || "active").toLowerCase() === "inactive");
+
+    return {
+      activeStudents,
+      overdueAssignments,
+      lowAttendanceStudents,
+      completionByCourse,
+      lowestCompletionCourse,
+      lowCompletionCourses,
+      trainersWithoutContent,
+      studentsNeedingAttention: Array.from(studentsNeedingAttention.values()),
+      inactiveTrainers,
+      attendanceAvailable: attendanceByStudent.size > 0,
+    };
+  }, [assignments, attendanceRecords, courseVideos, courses, enrichedStudents, trainerNameById, trainers]);
 
   const heroHighlights = [];
 
@@ -1714,6 +1858,91 @@ export default function AdminDashboard() {
     { label: "Mapped Students", value: metrics.mappedStudents, hint: "Assigned to both trainer and course", icon: Link2, tone: "bg-teal-50 text-teal-700 ring-teal-100", accent: "from-teal-400 via-emerald-400 to-lime-400" },
   ];
 
+  const askMonitoringAgent = (question = insightQuery) => {
+    const normalized = question.trim().toLowerCase();
+    if (!normalized) return;
+
+    let answer;
+    if (normalized.includes("active") && normalized.includes("student")) {
+      answer = `${monitoringInsights.activeStudents.length} students currently have an active account.`;
+    } else if (normalized.includes("lowest") && normalized.includes("completion")) {
+      const course = monitoringInsights.lowestCompletionCourse;
+      answer = course
+        ? `${course.name} has the lowest completion rate at ${course.completionRate}% across ${course.enrolled} enrolled student${course.enrolled === 1 ? "" : "s"}.`
+        : "There is not enough enrolled-student progress data to calculate a course completion rate yet.";
+    } else if ((normalized.includes("trainer") && normalized.includes("content")) || normalized.includes("uploaded")) {
+      answer = monitoringInsights.trainersWithoutContent.length
+        ? `${monitoringInsights.trainersWithoutContent.map((trainer) => `${trainer.name} (${trainer.courses.join(", ")})`).join("; ")} ${monitoringInsights.trainersWithoutContent.length === 1 ? "has" : "have"} not uploaded course content.`
+        : "Every trainer with an assigned course has uploaded course content.";
+    } else if (normalized.includes("attendance")) {
+      answer = !monitoringInsights.attendanceAvailable
+        ? "Attendance data is not available yet. Add attendance records to enable this insight."
+        : monitoringInsights.lowAttendanceStudents.length
+          ? `${monitoringInsights.lowAttendanceStudents.map(({ student, percentage }) => `${firstValue(student.full_name, student.name, student.email, "Student")} (${percentage}%)`).join(", ")} have attendance below 75%.`
+          : "No students currently have attendance below 75%.";
+    } else if (normalized.includes("overdue") && normalized.includes("assignment")) {
+      answer = `${monitoringInsights.overdueAssignments.length} assignment${monitoringInsights.overdueAssignments.length === 1 ? " is" : "s are"} overdue.`;
+    } else if (normalized.includes("summary") || normalized.includes("today")) {
+      answer = `Today’s LMS summary: ${monitoringInsights.activeStudents.length} active students, ${metrics.activeCourses} active courses, ${monitoringInsights.overdueAssignments.length} overdue assignments, ${monitoringInsights.lowCompletionCourses.length} courses below 50% completion, and ${monitoringInsights.trainersWithoutContent.length} trainer${monitoringInsights.trainersWithoutContent.length === 1 ? "" : "s"} with no uploaded course content.`;
+    } else {
+      answer = "Try asking about active students, course completion, trainer content, attendance, overdue assignments, or today’s LMS summary.";
+    }
+
+    setInsightQuery(question);
+    setInsightAnswer(answer);
+  };
+
+  const renderInsights = () => {
+    const cards = [
+      { label: "Students needing attention", value: monitoringInsights.studentsNeedingAttention.length, hint: "Low progress or attendance", icon: UserCheck, tone: "bg-amber-50 text-amber-800 ring-amber-100" },
+      { label: "Overdue assignments", value: monitoringInsights.overdueAssignments.length, hint: "Past their due date", icon: Clock3, tone: "bg-rose-50 text-rose-700 ring-rose-100" },
+      { label: "Courses with low completion", value: monitoringInsights.lowCompletionCourses.length, hint: "Below 50% average progress", icon: ChartNoAxesColumn, tone: "bg-violet-50 text-violet-700 ring-violet-100" },
+      { label: "Inactive trainers", value: monitoringInsights.inactiveTrainers.length, hint: "Trainer accounts marked inactive", icon: UsersRound, tone: "bg-slate-100 text-slate-700 ring-slate-200" },
+    ];
+    const prompts = [
+      "How many active students are there?",
+      "Which course has the lowest completion rate?",
+      "Which trainer has not uploaded course content?",
+      "Show students with low attendance.",
+      "How many assignments are overdue?",
+      "Give me today's LMS summary.",
+    ];
+
+    return (
+      <section className="space-y-6">
+        <header className="overflow-hidden rounded-[2rem] bg-[radial-gradient(circle_at_88%_20%,rgba(231,232,91,0.34),transparent_25%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_130%)] p-6 text-white shadow-[0_24px_60px_-35px_rgba(7,26,47,0.4)] sm:p-8">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-3 py-1.5 text-xs font-bold uppercase tracking-[0.2em] text-cert-yellow"><Sparkles size={14} /> Admin Monitoring Agent</p>
+              <h2 className="mt-4 text-3xl font-semibold tracking-tight">AI Insights</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-emerald-50/85">Ask questions about student activity, course completion, trainer content, attendance, and overdue work. Results use live LMS records.</p>
+            </div>
+            <div className="rounded-2xl border border-white/15 bg-white/10 px-4 py-3 text-right backdrop-blur"><p className="text-2xl font-semibold">{monitoringInsights.activeStudents.length}</p><p className="mt-1 text-xs font-semibold uppercase tracking-[0.15em] text-emerald-50/80">Active students</p></div>
+          </div>
+        </header>
+
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {cards.map(({ label, value, hint, icon: Icon, tone }) => <article key={label} className={`rounded-2xl bg-white p-5 shadow-[0_18px_45px_-34px_rgba(7,26,47,0.3)] ring-1 ${tone.split(" ").at(-1)}`}><span className={`flex h-10 w-10 items-center justify-center rounded-xl ${tone.split(" ").slice(0, 2).join(" ")}`}><Icon size={20} /></span><p className="mt-5 text-3xl font-semibold text-cert-ink">{value}</p><p className="mt-1 font-semibold text-cert-ink">{label}</p><p className="mt-1 text-xs text-slate-500">{hint}</p></article>)}
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(21rem,0.9fr)]">
+          <div className="rounded-[1.75rem] border border-cert-line bg-white p-5 shadow-[0_20px_50px_-36px_rgba(7,26,47,0.25)] sm:p-6">
+            <div className="flex items-center gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cert-mint text-cert-green-dark"><Sparkles size={21} /></span><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Ask the agent</p><h3 className="mt-1 text-xl font-semibold text-cert-ink">LMS operations assistant</h3></div></div>
+            <form className="mt-5" onSubmit={(event) => { event.preventDefault(); askMonitoringAgent(); }}>
+              <div className="flex flex-col gap-3 sm:flex-row"><input value={insightQuery} onChange={(event) => setInsightQuery(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" placeholder="Ask about your LMS..." /><button type="submit" className="rounded-xl bg-cert-navy px-5 py-3 text-sm font-semibold text-white hover:bg-cert-ink">Ask</button></div>
+            </form>
+            <div className="mt-4 flex flex-wrap gap-2">{prompts.map((prompt) => <button key={prompt} type="button" onClick={() => askMonitoringAgent(prompt)} className="rounded-full border border-cert-line bg-cert-mint px-3 py-2 text-left text-xs font-semibold text-cert-green-dark hover:bg-cert-green hover:text-cert-ink">{prompt}</button>)}</div>
+            <div className="mt-5 min-h-24 rounded-2xl border border-cert-green/25 bg-[linear-gradient(135deg,#f5fff8_0%,#eef8f3_100%)] p-4 text-sm leading-6 text-cert-ink"><p className="font-semibold text-cert-green-dark">{insightAnswer ? "Monitoring result" : "Ready when you are"}</p><p className="mt-1">{insightAnswer || "Choose a suggested question or type your own to get a live LMS answer."}</p></div>
+          </div>
+
+          <div className="rounded-[1.75rem] border border-cert-line bg-white p-5 shadow-[0_20px_50px_-36px_rgba(7,26,47,0.25)] sm:p-6"><div className="flex items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Completion chart</p><h3 className="mt-1 text-xl font-semibold text-cert-ink">Course progress</h3></div><ChartNoAxesColumn className="text-cert-green-dark" size={24} /></div><div className="mt-6 space-y-4">{monitoringInsights.completionByCourse.length === 0 ? <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No course progress data yet.</p> : monitoringInsights.completionByCourse.map((course) => <div key={course.id}><div className="flex items-center justify-between gap-3 text-sm"><span className="truncate font-medium text-cert-ink">{course.name}</span><span className="shrink-0 font-semibold text-cert-green-dark">{course.completionRate === null ? "No data" : `${course.completionRate}%`}</span></div><div className="mt-2 h-2.5 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full ${course.completionRate !== null && course.completionRate < 50 ? "bg-amber-400" : "bg-cert-green"}`} style={{ width: `${course.completionRate || 0}%` }} /></div><p className="mt-1 text-xs text-slate-500">{course.enrolled} enrolled student{course.enrolled === 1 ? "" : "s"}</p></div>)}</div></div>
+        </div>
+
+        <div className="grid gap-5 lg:grid-cols-2"><article className="rounded-[1.5rem] border border-cert-line bg-white p-5"><div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700"><UserCheck size={19} /></span><div><p className="font-semibold text-cert-ink">Students needing attention</p><p className="text-sm text-slate-500">Low progress or attendance below 75%</p></div></div><div className="mt-4 space-y-2">{monitoringInsights.studentsNeedingAttention.length ? monitoringInsights.studentsNeedingAttention.slice(0, 8).map((student) => <p key={student.id} className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-cert-ink">{firstValue(student.full_name, student.name, student.email, "Student")} <span className="text-slate-500">— {student.progress}% progress</span></p>) : <p className="rounded-xl bg-cert-mint px-3 py-3 text-sm text-cert-green-dark">No students currently need attention.</p>}</div></article><article className="rounded-[1.5rem] border border-cert-line bg-white p-5"><div className="flex items-center gap-3"><span className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 text-sky-700"><Video size={19} /></span><div><p className="font-semibold text-cert-ink">Trainer content watchlist</p><p className="text-sm text-slate-500">Assigned trainers with no uploaded course content</p></div></div><div className="mt-4 space-y-2">{monitoringInsights.trainersWithoutContent.length ? monitoringInsights.trainersWithoutContent.map((trainer) => <p key={trainer.id} className="rounded-xl bg-slate-50 px-3 py-2 text-sm text-cert-ink">{trainer.name}<span className="block pt-1 text-xs text-slate-500">{trainer.courses.join(", ")}</span></p>) : <p className="rounded-xl bg-cert-mint px-3 py-3 text-sm text-cert-green-dark">All assigned trainers have course content.</p>}</div></article></div>
+      </section>
+    );
+  };
+
   const renderAnalytics = () => {
     return (
       <section className="space-y-6">
@@ -2380,6 +2609,7 @@ export default function AdminDashboard() {
           </section>
         )}
 
+        {activeTab === "insights" && renderInsights()}
         {activeTab === "analytics" && renderAnalytics()}
       </div>
     </div>
