@@ -21,6 +21,9 @@ const formatAssignedDate = (date) => {
     ? "Date unavailable"
     : new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric" }).format(parsed);
 };
+const currentDate = new Date().toISOString().slice(0, 10);
+const taskEndDate = (task) => task?.end_date || task?.due_date || "";
+const taskIsInactive = (task) => Boolean(taskEndDate(task) && taskEndDate(task) < currentDate) || task?.status === "inactive";
 const formatVideoAvailability = (date) => {
   if (!date) return "Available 24 hours after posting";
   const parsed = new Date(date);
@@ -143,8 +146,8 @@ export default function TrainerDashboard() {
   const [courseVideos, setCourseVideos] = useState([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [assignmentForm, setAssignmentForm] = useState({ courseId: "", title: "", description: "", dueDate: "" });
-  const [projectForm, setProjectForm] = useState({ courseId: "", title: "", description: "" });
+  const [assignmentForm, setAssignmentForm] = useState({ courseId: "", title: "", description: "", assignedDate: currentDate, endDate: "" });
+  const [projectForm, setProjectForm] = useState({ courseId: "", title: "", description: "", assignedDate: currentDate, endDate: "" });
   const [videoForm, setVideoForm] = useState({ courseId: "", title: "", lessonDate: new Date().toISOString().slice(0, 10), videoUrl: "" });
   const [reviewNotes, setReviewNotes] = useState({});
   const [activeWorkspace, setActiveWorkspace] = useState("overview");
@@ -262,7 +265,7 @@ export default function TrainerDashboard() {
     const groups = new Map();
 
     projects.forEach((project) => {
-      const assignedAt = project.created_at || project.assigned_at || project.submitted_at || null;
+      const assignedAt = project.assigned_date || project.assigned_at || project.created_at || project.submitted_at || null;
       const key = `${project.course_id || "course"}-${project.title || "project"}-${assignedAt || project.id}`;
       const group = groups.get(key) || { ...project, assignedAt, studentIds: new Set() };
       if (project.student_id) group.studentIds.add(String(project.student_id));
@@ -315,8 +318,12 @@ export default function TrainerDashboard() {
     event.preventDefault();
     setError("");
     setMessage("");
-    if (!assignmentForm.courseId || !assignmentForm.title.trim()) {
-      setError("Select a course and enter an assignment title.");
+    if (!assignmentForm.courseId || !assignmentForm.title.trim() || !assignmentForm.assignedDate || !assignmentForm.endDate) {
+      setError("Select a course, enter a title, assignment date, and end date.");
+      return;
+    }
+    if (assignmentForm.endDate < assignmentForm.assignedDate) {
+      setError("The assignment end date must be on or after the assignment date.");
       return;
     }
     const studentIds = enrolledStudentIds(assignmentForm.courseId);
@@ -328,7 +335,8 @@ export default function TrainerDashboard() {
       p_course_id: assignmentForm.courseId,
       p_title: assignmentForm.title.trim(),
       p_description: formatTaskDescription(assignmentForm.description) || null,
-      p_due_date: assignmentForm.dueDate || null,
+      p_assigned_date: assignmentForm.assignedDate,
+      p_end_date: assignmentForm.endDate,
     });
     if (createError) {
       setError(createError.message || "Unable to create assignment.");
@@ -338,7 +346,7 @@ export default function TrainerDashboard() {
       setError("This course has no enrolled students to receive the assignment.");
       return;
     }
-    setAssignmentForm({ courseId: "", title: "", description: "", dueDate: "" });
+    setAssignmentForm({ courseId: "", title: "", description: "", assignedDate: currentDate, endDate: "" });
     setMessage(`Assignment sent to ${assignedCount} enrolled ${assignedCount === 1 ? "student" : "students"}.`);
     await loadDashboard();
   };
@@ -347,8 +355,12 @@ export default function TrainerDashboard() {
     event.preventDefault();
     setError("");
     setMessage("");
-    if (!projectForm.courseId || !projectForm.title.trim()) {
-      setError("Select a course and enter a project title.");
+    if (!projectForm.courseId || !projectForm.title.trim() || !projectForm.assignedDate || !projectForm.endDate) {
+      setError("Select a course, enter a title, assignment date, and end date.");
+      return;
+    }
+    if (projectForm.endDate < projectForm.assignedDate) {
+      setError("The project end date must be on or after the assignment date.");
       return;
     }
     const studentIds = enrolledStudentIds(projectForm.courseId);
@@ -360,6 +372,8 @@ export default function TrainerDashboard() {
       p_course_id: projectForm.courseId,
       p_title: projectForm.title.trim(),
       p_description: formatTaskDescription(projectForm.description) || null,
+      p_assigned_date: projectForm.assignedDate,
+      p_end_date: projectForm.endDate,
     });
     if (createError) {
       setError(createError.message || "Unable to assign project.");
@@ -369,7 +383,7 @@ export default function TrainerDashboard() {
       setError("This course has no enrolled students to receive the project.");
       return;
     }
-    setProjectForm({ courseId: "", title: "", description: "" });
+    setProjectForm({ courseId: "", title: "", description: "", assignedDate: currentDate, endDate: "" });
     setMessage(`Project assigned to ${assignedCount} enrolled ${assignedCount === 1 ? "student" : "students"}.`);
     await loadDashboard();
   };
@@ -558,13 +572,13 @@ export default function TrainerDashboard() {
         {(activeWorkspace === "create-assignment" || activeWorkspace === "assign-project") && (
           <section className="grid w-full gap-5 xl:grid-cols-[minmax(0,0.82fr)_minmax(0,1.18fr)]">
           {activeWorkspace === "create-assignment" && <form id="create-assignment" onSubmit={createAssignment} className="overflow-hidden rounded-[1.9rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
-            <header className="relative overflow-hidden bg-[radial-gradient(circle_at_88%_12%,rgba(231,232,91,0.3),transparent_30%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_140%)] px-6 py-7 text-white"><div className="absolute -bottom-10 right-7 h-28 w-28 rounded-full border border-white/10" /><div className="relative"><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-yellow">Assignment builder</p><h2 className="mt-2 inline-flex items-center gap-2 text-2xl font-semibold"><Plus size={22} /> Create assignment</h2><p className="mt-2 text-sm leading-6 text-emerald-50/85">Set the course, instructions, and due date for your learners.</p></div></header>
+            <header className="relative overflow-hidden bg-[radial-gradient(circle_at_88%_12%,rgba(231,232,91,0.3),transparent_30%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_140%)] px-6 py-7 text-white"><div className="absolute -bottom-10 right-7 h-28 w-28 rounded-full border border-white/10" /><div className="relative"><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-yellow">Assignment builder</p><h2 className="mt-2 inline-flex items-center gap-2 text-2xl font-semibold"><Plus size={22} /> Create assignment</h2><p className="mt-2 text-sm leading-6 text-emerald-50/85">Set the course, instructions, assignment date, and end date for your learners.</p></div></header>
             <div className="grid gap-4 p-5 sm:p-6">
               <label className="text-sm font-semibold text-cert-ink">Course<select value={assignmentForm.courseId} onChange={(e) => setAssignmentForm({ ...assignmentForm, courseId: e.target.value })} className="mt-2 w-full rounded-xl border border-cert-line bg-cert-mint px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select></label>
               <p className="rounded-2xl border border-cert-line bg-cert-mint px-4 py-3 text-sm leading-5 text-slate-600">{assignmentForm.courseId ? <>This assignment will be stored under this course and available to <strong className="text-cert-ink">all {enrolledStudentIds(assignmentForm.courseId).length} enrolled students</strong>.</> : "Select a course to make the assignment available only to its enrolled students."}</p>
               <label className="text-sm font-semibold text-cert-ink">Assignment title<input value={assignmentForm.title} onChange={(e) => setAssignmentForm({ ...assignmentForm, title: e.target.value })} placeholder="For example: Build a Python calculator" className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label>
               <label className="text-sm font-semibold text-cert-ink">Instructions<textarea value={assignmentForm.description} onChange={(e) => setAssignmentForm({ ...assignmentForm, description: e.target.value })} placeholder={"Objective: What learners will achieve\nDataset / Requirements: Files, tools, or constraints\nTasks:\n1. First task\n2. Second task\nExpected Output: What to submit"} className="mt-2 min-h-40 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" /></label>
-              <label className="text-sm font-semibold text-cert-ink">Due date<input type="date" value={assignmentForm.dueDate} onChange={(e) => setAssignmentForm({ ...assignmentForm, dueDate: e.target.value })} className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" /></label>
+              <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-cert-ink">Assignment date<input type="date" value={assignmentForm.assignedDate} onChange={(e) => setAssignmentForm({ ...assignmentForm, assignedDate: e.target.value })} className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label><label className="text-sm font-semibold text-cert-ink">End date<input type="date" min={assignmentForm.assignedDate || undefined} value={assignmentForm.endDate} onChange={(e) => setAssignmentForm({ ...assignmentForm, endDate: e.target.value })} className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label></div>
               <button className="mt-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[linear-gradient(135deg,#0d8f55_0%,#31c96f_100%)] px-4 py-3.5 font-semibold text-cert-ink shadow-[0_16px_28px_-18px_rgba(13,143,85,0.7)] transition hover:brightness-105"><Plus size={18} /> Create assignment</button>
             </div>
           </form>}
@@ -586,8 +600,9 @@ export default function TrainerDashboard() {
                       <p className="font-semibold text-cert-ink">{titleFor(assignment, "Assignment")}</p>
                       <p className="mt-1 text-sm text-slate-600">Course: {titleFor(courseById.get(String(assignment.course_id)), "Course")}</p>
                     </div>
-                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-cert-green-dark">{assignment.status || "active"}</span>
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${taskIsInactive(assignment) ? "bg-slate-200 text-slate-600" : "bg-white text-cert-green-dark"}`}>{taskIsInactive(assignment) ? "inactive" : assignment.status || "active"}</span>
                   </div>
+                  <p className="mt-3 text-xs text-slate-500">Assigned: {formatAssignmentDate(assignment.assigned_date || assignment.created_at?.slice(0, 10))} · Ends: {formatAssignmentDate(taskEndDate(assignment))}</p>
                   {assignment.description && <TaskInstructions description={assignment.description} />}
                 </article>)}</div>
               </div>)}
@@ -611,6 +626,7 @@ export default function TrainerDashboard() {
               </div>
               <label className="text-sm font-semibold text-cert-ink">Project title<input value={projectForm.title} onChange={(e) => setProjectForm({ ...projectForm, title: e.target.value })} placeholder="For example: Build an automation workflow" className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label>
               <label className="text-sm font-semibold text-cert-ink">Project instructions<textarea value={projectForm.description} onChange={(e) => setProjectForm({ ...projectForm, description: e.target.value })} placeholder={"Objective: What learners will build\nRequirements: Tools, data, or constraints\nTasks:\n1. First task\n2. Second task\nExpected Output: Repository, document, or file to submit"} className="mt-2 min-h-40 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" /></label>
+              <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-cert-ink">Assignment date<input type="date" value={projectForm.assignedDate} onChange={(e) => setProjectForm({ ...projectForm, assignedDate: e.target.value })} className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label><label className="text-sm font-semibold text-cert-ink">End date<input type="date" min={projectForm.assignedDate || undefined} value={projectForm.endDate} onChange={(e) => setProjectForm({ ...projectForm, endDate: e.target.value })} className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label></div>
               <button className="mt-1 inline-flex items-center justify-center gap-2 rounded-xl bg-[linear-gradient(135deg,#0d8f55_0%,#31c96f_100%)] px-4 py-3.5 font-semibold text-cert-ink shadow-[0_16px_28px_-18px_rgba(13,143,85,0.7)] transition hover:brightness-105"><Plus size={18} /> Assign project to all students</button>
             </div>
           </form>}
@@ -628,8 +644,9 @@ export default function TrainerDashboard() {
               {assignedProjectGroups.length === 0 ? <div className="rounded-[1.35rem] border border-dashed border-cert-line bg-[linear-gradient(135deg,#f6fffa_0%,#edf8f2_100%)] px-6 py-12 text-center"><span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-cert-green-dark shadow-sm ring-1 ring-cert-line"><ClipboardCheck size={27} /></span><h3 className="mt-4 text-lg font-semibold text-cert-ink">No projects assigned yet</h3><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500">Once you assign a project, its date and student count will appear here.</p></div> : assignedProjectGroups.map((project) => <article key={`${project.id}-${project.assignedAt || "undated"}`} className="rounded-2xl border border-cert-line bg-white p-4 shadow-[0_12px_28px_-24px_rgba(7,26,47,0.35)]">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div><p className="font-semibold text-cert-ink">{titleFor(project, "Project")}</p><p className="mt-1 text-sm text-slate-600">{titleFor(courseById.get(String(project.course_id)), "Course")}</p></div>
-                  <span className="rounded-full bg-cert-mint px-3 py-1 text-xs font-bold text-cert-green-dark">{formatAssignedDate(project.assignedAt)}</span>
+                  <span className={`rounded-full px-3 py-1 text-xs font-bold ${taskIsInactive(project) ? "bg-slate-200 text-slate-600" : "bg-cert-mint text-cert-green-dark"}`}>{taskIsInactive(project) ? "Inactive" : formatAssignedDate(project.assignedAt)}</span>
                 </div>
+                <p className="mt-3 text-xs text-slate-500">Assigned: {formatAssignmentDate(project.assigned_date || project.assignedAt?.slice(0, 10))} · Ends: {formatAssignmentDate(taskEndDate(project))}</p>
                 {project.description && <TaskInstructions description={project.description} />}
                 <div className="mt-4 flex items-center gap-2 border-t border-cert-line pt-3 text-sm font-semibold text-cert-ink"><UsersRound size={16} className="text-cert-green-dark" /> {project.studentIds.size} {project.studentIds.size === 1 ? "student" : "students"} assigned</div>
               </article>)}

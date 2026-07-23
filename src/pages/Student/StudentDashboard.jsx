@@ -14,6 +14,7 @@ const statusStyles = {
   approved: "bg-cert-green/20 text-cert-green-dark",
   rejected: "bg-rose-100 text-rose-700",
   rework: "bg-rose-100 text-rose-700",
+  inactive: "bg-slate-200 text-slate-600",
 };
 
 const emptyData = [];
@@ -21,6 +22,10 @@ const certificateCompanyName = "CERTISURED LEARNING MANAGEMENT SYSTEM";
 
 const titleFor = (item, fallback = "Untitled") =>
   item?.title || item?.name || item?.course_name || item?.project_name || item?.assignment_name || item?.full_name || fallback;
+
+const currentDate = new Date().toISOString().slice(0, 10);
+const taskEndDate = (task) => task?.end_date || task?.due_date || "";
+const taskIsPastEndDate = (task) => Boolean(taskEndDate(task) && taskEndDate(task) < currentDate);
 
 // Trainers can enter a brief or a fully structured brief.  Keep the latter
 // readable for students by recognizing the labels used in the task builder.
@@ -452,7 +457,8 @@ export default function StudentDashboard() {
     return tasks.map((task) => {
       const taskId = task.id || task.assignment_id || task.project_id;
       const submission = task.task_type === "project" ? task : submissionByTask.get(taskId);
-      const status = normalizeStatus(submission?.status || task.status || "pending");
+      const rawStatus = normalizeStatus(submission?.status || task.status || "pending");
+      const status = taskIsPastEndDate(task) && !["submitted", "approved"].includes(rawStatus) ? "inactive" : rawStatus;
       return { ...task, taskId, submission, status };
     });
   }, [tasks, submissions]);
@@ -539,6 +545,10 @@ export default function StudentDashboard() {
   const selectedCourseEmbed = videoEmbedUrl(selectedCourseVideo);
 
   const openSubmitForm = (task) => {
+    if (task.status === "inactive" || taskIsPastEndDate(task)) {
+      setSubmitError(`This ${task.task_type || "task"} became inactive after ${taskEndDate(task)}.`);
+      return;
+    }
     setSubmissionTask(task);
     setWorkFiles([]);
     setWorkSource("");
@@ -606,6 +616,11 @@ export default function StudentDashboard() {
 
     if (!submissionTask) {
       setSubmitError("Please select a task.");
+      return;
+    }
+
+    if (submissionTask.status === "inactive" || taskIsPastEndDate(submissionTask)) {
+      setSubmitError(`This ${submissionTask.task_type || "task"} became inactive after ${taskEndDate(submissionTask)} and can no longer be submitted.`);
       return;
     }
 
@@ -757,18 +772,19 @@ export default function StudentDashboard() {
   const renderTask = (task) => {
     const isSubmitted = task.status === "submitted";
     const isApproved = task.status === "approved";
-    const canSubmit = !isSubmitted && !isApproved;
+    const isInactive = task.status === "inactive";
+    const canSubmit = !isSubmitted && !isApproved && !isInactive;
     const course = courseById.get(String(task.course_id || task.course || ""));
     return (
       <article key={`${task.task_type}-${task.taskId || titleFor(task)}`} className="group relative overflow-hidden rounded-[1.4rem] border border-slate-200 bg-white shadow-[0_14px_34px_-30px_rgba(7,26,47,0.35)] transition duration-200 hover:-translate-y-0.5 hover:border-cert-green/50 hover:shadow-[0_18px_40px_-28px_rgba(7,26,47,0.32)]">
-        <div className={`absolute inset-y-0 left-0 w-1 ${isApproved ? "bg-emerald-500" : isSubmitted ? "bg-sky-400" : "bg-cert-green"}`} />
+        <div className={`absolute inset-y-0 left-0 w-1 ${isApproved ? "bg-emerald-500" : isSubmitted ? "bg-sky-400" : isInactive ? "bg-slate-400" : "bg-cert-green"}`} />
         <div className="p-5 pl-6">
           <div className="flex items-start gap-3">
-            <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${isApproved ? "bg-emerald-50 text-emerald-600" : isSubmitted ? "bg-sky-50 text-sky-600" : "bg-cert-mint text-cert-green-dark"}`}><Target size={19} aria-hidden="true" /></span>
+            <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${isApproved ? "bg-emerald-50 text-emerald-600" : isSubmitted ? "bg-sky-50 text-sky-600" : isInactive ? "bg-slate-100 text-slate-500" : "bg-cert-mint text-cert-green-dark"}`}><Target size={19} aria-hidden="true" /></span>
             <div className="min-w-0 flex-1"><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold leading-6 text-cert-ink">{titleFor(task, "Task")}</h3><p className="mt-1 text-xs font-medium text-slate-500">{titleFor(course, "Course")}</p></div><span className={`rounded-full px-3 py-1 text-[0.65rem] font-bold uppercase tracking-[0.14em] ${statusStyles[task.status] || (task.status === "active" ? "bg-sky-100 text-sky-700" : "bg-slate-200 text-slate-700")}`}>{task.status === "active" ? "To do" : task.status}</span></div></div>
           </div>
           {task.description && <TaskInstructions description={task.description} />}
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3"><p className="text-xs font-medium text-slate-500">{task.due_date ? <>Due <span className="font-semibold text-cert-ink">{task.due_date}</span></> : "No due date"}</p>{canSubmit && <button type="button" onClick={() => openSubmitForm(task)} className="rounded-xl bg-cert-green px-4 py-2 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">{task.status === "rejected" ? "Submit revision" : "Submit work"}</button>}{isSubmitted && <p className="text-xs font-semibold text-sky-700">Waiting for review</p>}{isApproved && <p className="text-xs font-semibold text-emerald-700">Completed</p>}</div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3"><p className="text-xs font-medium text-slate-500">{task.assigned_date && <>Assigned <span className="font-semibold text-cert-ink">{task.assigned_date}</span> · </>}{taskEndDate(task) ? <>Ends <span className="font-semibold text-cert-ink">{taskEndDate(task)}</span></> : "No end date"}</p>{canSubmit && <button type="button" onClick={() => openSubmitForm(task)} className="rounded-xl bg-cert-green px-4 py-2 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">{task.status === "rejected" ? "Submit revision" : "Submit work"}</button>}{isInactive && <p className="text-xs font-semibold text-slate-600">Inactive after end date</p>}{isSubmitted && <p className="text-xs font-semibold text-sky-700">Waiting for review</p>}{isApproved && <p className="text-xs font-semibold text-emerald-700">Completed</p>}</div>
         </div>
       </article>
     );
