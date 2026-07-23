@@ -19,3 +19,8 @@ entrypoint = "./functions/send-trainer-email/index.ts"
 enabled = true
 verify_jwt = true
 entrypoint = "./functions/send-certificate-email/index.ts"
+
+[functions.submit-student-registration]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/submit-student-registration/index.ts"

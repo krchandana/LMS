@@ -346,113 +346,18 @@ const LoginPage = () => {
       return;
     }
 
-    const normalizedEmail = emailToUse.trim().toLowerCase();
-    if (hasServiceRoleKey) {
-      const [profileResult, requestResult] = await Promise.all([
-        serviceRoleTableRequest("profiles", `?select=id,status&email=eq.${encodeURIComponent(normalizedEmail)}&limit=1`, "GET"),
-        serviceRoleTableRequest("access_requests", `?select=id,status&email=eq.${encodeURIComponent(normalizedEmail)}&limit=1`, "GET"),
-      ]);
-      const existingProfile = Array.isArray(profileResult.data) ? profileResult.data[0] : null;
-      const existingRequest = Array.isArray(requestResult.data) ? requestResult.data[0] : null;
-
-      if (existingProfile || existingRequest) {
-        const status = (existingProfile?.status || existingRequest?.status || "pending").toLowerCase();
-        if (["active", "approved"].includes(status)) {
-          setError("An active student account already uses this email. Please sign in with the Student ID sent by admin.");
-        } else if (status === "rejected") {
-          setError("This registration was previously rejected. Please contact the admin before registering again.");
-        } else {
-          setSuccess("A registration request for this email is already pending admin approval.");
-        }
-        return;
-      }
-    }
-
-    let studentId;
-    try {
-      studentId = await nextStudentLoginId();
-    } catch (err) {
-      setError(err?.message || "Unable to generate the next student ID.");
-      return;
-    }
-    const authEmail = studentAuthEmailFor(studentId);
-    const temporaryPassword = `Pending@${Date.now().toString().slice(-6)}`;
-
-    const { data: createdUser, error: createError } = await adminAuthRequest("/users", "POST", {
-      email: authEmail,
-      password: temporaryPassword,
-      email_confirm: true,
-      user_metadata: {
-        full_name: studentName.trim(),
-        registered_email: emailToUse,
-        student_id: studentId,
-        role: "student",
-        status: "pending",
-      },
+    const { data, error: registrationError } = await supabase.functions.invoke("submit-student-registration", {
+      body: { name: studentName.trim(), email: emailToUse.trim() },
     });
-
-    if (createError) {
-      const message = createError.message || createError.error_description || JSON.stringify(createError);
-      if (message.toLowerCase().includes("already")) {
-        setSuccess("Your login request is already with admin. Please wait for approval.");
-        return;
-      }
-
-      setError(message);
-      return;
-    }
-
-    const authUser = createdUser;
-    const profilePayload = {
-      id: authUser?.id,
-      email: emailToUse,
-      auth_email: authEmail,
-      full_name: studentName.trim(),
-      role: "student",
-      status: "pending",
-      student_id: studentId,
-    };
-
-    if (authUser?.id) {
-      const { error: profileError } = await upsertWithColumnFallback("profiles", profilePayload, { onConflict: "id" });
-      if (profileError) {
-        const message = profileError.message || "";
-        if (message.includes("profiles_email_key")) {
-          await serviceRoleAuthRequest(`/users/${authUser.id}`, "DELETE");
-          setSuccess("A registration request for this email already exists. Please wait for admin approval.");
-          return;
-        }
-        setError(profileError.message || "Unable to save the student request.");
-        return;
-      }
-    }
-
-    const requestPayload = {
-      profile_id: authUser?.id,
-      user_id: authUser?.id,
-      student_id: studentId,
-      student_login_id: studentId,
-      full_name: studentName.trim(),
-      name: studentName.trim(),
-      email: emailToUse,
-      auth_email: authEmail,
-      role: "student",
-      status: "pending",
-      message: "Student login approval requested.",
-    };
-
-    const { error: requestError } = await insertWithColumnFallback("access_requests", requestPayload);
-    await supabase.auth.signOut();
-
-    if (requestError) {
-      setError(requestError.message || "Your account was created, but the admin request could not be saved.");
+    if (registrationError || data?.error) {
+      setError(data?.error || registrationError?.message || "Unable to submit the registration request.");
       return;
     }
 
     setStudentName("");
     setStudentEmail("");
     setCredential("");
-    setSuccess("Registration successful. Your request was sent to admin. After approval, admin will send your Student ID and password.");
+    setSuccess(data?.message || "Registration successful. Your request was sent to admin. After approval, admin will send your Student ID and password.");
   };
 
   const handleSubmit = async (event) => {
