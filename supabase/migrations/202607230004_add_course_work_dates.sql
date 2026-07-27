@@ -13,8 +13,11 @@ set assigned_date = coalesce(assigned_date, created_at::date),
     end_date = coalesce(end_date, due_date)
 where assigned_date is null or end_date is null;
 
+-- Older project tables do not always have a created_at column. Use the
+-- migration date for legacy records; newly assigned projects store the exact
+-- trainer-selected assignment date through the RPC below.
 update public.projects
-set assigned_date = coalesce(assigned_date, created_at::date)
+set assigned_date = coalesce(assigned_date, current_date)
 where assigned_date is null;
 
 create index if not exists assignments_end_date_idx on public.assignments (end_date) where end_date is not null;

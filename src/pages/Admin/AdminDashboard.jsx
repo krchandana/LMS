@@ -3,6 +3,7 @@ import {
   Bell,
   Award,
   ChartNoAxesColumn,
+  CheckCircle2,
   ClipboardList,
   Clock3,
   GraduationCap,
@@ -471,6 +472,17 @@ const courseDurationComplete = (course) => {
 
 const firstValue = (...values) => values.find((value) => value !== null && value !== undefined && value !== "");
 
+const workspaceMessages = {
+  overview: { title: "Hi Admin!", detail: "Opening your dashboard and the latest platform activity." },
+  requests: { title: "Opening access requests...", detail: "Loading student registrations waiting for your review." },
+  trainers: { title: "Opening trainers...", detail: "Loading trainer accounts and course assignments." },
+  students: { title: "Opening students...", detail: "Loading student profiles, courses, and progress." },
+  courses: { title: "Opening courses...", detail: "Loading course information and availability." },
+  mapping: { title: "Opening mapping...", detail: "Loading student, trainer, and course assignments." },
+  certificates: { title: "Opening certificates...", detail: "Loading issued certificates." },
+  analytics: { title: "Opening analytics...", detail: "Loading learning activity and course insights." },
+};
+
 export default function AdminDashboard() {
   const { profile } = useAuth();
   const location = useLocation();
@@ -535,6 +547,8 @@ export default function AdminDashboard() {
               : location.pathname.endsWith("/admin")
                 ? "overview"
                 : "overview";
+
+  const workspaceMessage = workspaceMessages[activeTab] || workspaceMessages.overview;
 
   const loadData = async () => {
     setLoading(true);
@@ -786,6 +800,11 @@ export default function AdminDashboard() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    const pageLabel = activeTab === "overview" ? "Admin dashboard" : `${tabs.find((tab) => tab.key === activeTab)?.label || "Admin page"}`;
+    setSuccess(activeTab === "overview" ? "Hi Admin! Your dashboard is open." : `${pageLabel} opened.`);
+  }, [activeTab]);
 
   useEffect(() => {
     // A student registration is created by an Edge Function, so this admin
@@ -1592,7 +1611,7 @@ export default function AdminDashboard() {
       return;
     }
 
-    setSuccess("Student details updated.");
+    setSuccess(`Student \"${editStudentName.trim()}\" was updated.`);
     cancelEditStudent();
     await loadData();
   };
@@ -1695,7 +1714,7 @@ export default function AdminDashboard() {
       return;
     }
 
-    setSuccess("Student removed.");
+    setSuccess(`Student \"${firstValue(student.full_name, student.name, student.email, "selected student")}\" was deleted.`);
     if (editingStudent?.id === student.id) cancelEditStudent();
     await loadData();
   };
@@ -1924,8 +1943,8 @@ export default function AdminDashboard() {
             <ShieldCheck size={28} aria-hidden="true" />
           </div>
           <p className="mt-6 text-xs font-semibold uppercase tracking-[0.28em] text-cert-green-dark">Admin workspace</p>
-          <p className="mt-3 text-2xl font-semibold text-cert-ink">Loading dashboard...</p>
-          <p className="mt-2 text-sm leading-6 text-slate-600">Preparing requests, users, courses, mapping, and analytics.</p>
+          <p className="mt-3 text-2xl font-semibold text-cert-ink">{workspaceMessage.title}</p>
+          <p className="mt-2 text-sm leading-6 text-slate-600">{workspaceMessage.detail}</p>
         </div>
       </div>
     );
@@ -2032,7 +2051,7 @@ export default function AdminDashboard() {
         {(error || success) && (
           <section className="space-y-3">
             {error && <p className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
-            {success && <p className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{success}</p>}
+            {success && <p role="status" className="flex items-center gap-2 rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-700"><CheckCircle2 size={18} aria-hidden="true" />{success}</p>}
             {approvalCredentials && <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"><p className="font-semibold">Email was not delivered to {approvalCredentials.name}.</p><p className="mt-1">Student ID: <span className="font-bold">{approvalCredentials.studentId}</span></p><p>Temporary password: <span className="font-bold">{approvalCredentials.temporaryPassword}</span></p><p className="mt-2 text-amber-800">Email error: {approvalCredentials.emailError}</p></div>}
           </section>
         )}

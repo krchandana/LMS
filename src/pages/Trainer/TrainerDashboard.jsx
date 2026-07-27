@@ -151,6 +151,7 @@ export default function TrainerDashboard() {
   const [videoForm, setVideoForm] = useState({ courseId: "", title: "", lessonDate: new Date().toISOString().slice(0, 10), videoUrl: "" });
   const [reviewNotes, setReviewNotes] = useState({});
   const [activeWorkspace, setActiveWorkspace] = useState("overview");
+  const trainerName = profile?.full_name || profile?.name || "Trainer";
 
   const loadDashboard = async () => {
     if (!profile?.id) return;
@@ -346,8 +347,30 @@ export default function TrainerDashboard() {
       setError("This course has no enrolled students to receive the assignment.");
       return;
     }
+
+    const course = courses.find((item) => String(item.id) === String(assignmentForm.courseId));
+    const { data: emailResult, error: notificationError } = await supabase.functions.invoke("send-assignment-notifications", {
+      body: {
+        courseId: assignmentForm.courseId,
+        workTitle: assignmentForm.title.trim(),
+        workType: "assignment",
+        assignedDate: assignmentForm.assignedDate,
+        endDate: assignmentForm.endDate,
+      },
+    });
+
     setAssignmentForm({ courseId: "", title: "", description: "", assignedDate: currentDate, endDate: "" });
-    setMessage(`Assignment sent to ${assignedCount} enrolled ${assignedCount === 1 ? "student" : "students"}.`);
+    if (notificationError || emailResult?.error) {
+      setMessage(`Assignment sent to ${assignedCount} enrolled ${assignedCount === 1 ? "student" : "students"}, but email notifications could not be sent. Check the notification email function and SMTP settings.`);
+    } else {
+      const sentCount = Number(emailResult?.sentCount) || 0;
+      const failedCount = Number(emailResult?.failedCount) || 0;
+      const courseName = titleFor(course, "the selected course");
+      const emailSummary = failedCount
+        ? `${sentCount} email${sentCount === 1 ? "" : "s"} sent; ${failedCount} could not be delivered.`
+        : `${sentCount} email${sentCount === 1 ? "" : "s"} sent.`;
+      setMessage(`Assignment \"${assignmentForm.title.trim()}\" was created for ${courseName}. ${emailSummary}`);
+    }
     await loadDashboard();
   };
 
@@ -383,8 +406,30 @@ export default function TrainerDashboard() {
       setError("This course has no enrolled students to receive the project.");
       return;
     }
+
+    const course = courses.find((item) => String(item.id) === String(projectForm.courseId));
+    const { data: emailResult, error: notificationError } = await supabase.functions.invoke("send-assignment-notifications", {
+      body: {
+        courseId: projectForm.courseId,
+        workTitle: projectForm.title.trim(),
+        workType: "project",
+        assignedDate: projectForm.assignedDate,
+        endDate: projectForm.endDate,
+      },
+    });
+
     setProjectForm({ courseId: "", title: "", description: "", assignedDate: currentDate, endDate: "" });
-    setMessage(`Project assigned to ${assignedCount} enrolled ${assignedCount === 1 ? "student" : "students"}.`);
+    if (notificationError || emailResult?.error) {
+      setMessage(`Project assigned to ${assignedCount} enrolled ${assignedCount === 1 ? "student" : "students"}, but email notifications could not be sent. Check the notification email function and SMTP settings.`);
+    } else {
+      const sentCount = Number(emailResult?.sentCount) || 0;
+      const failedCount = Number(emailResult?.failedCount) || 0;
+      const courseName = titleFor(course, "the selected course");
+      const emailSummary = failedCount
+        ? `${sentCount} email${sentCount === 1 ? "" : "s"} sent; ${failedCount} could not be delivered.`
+        : `${sentCount} email${sentCount === 1 ? "" : "s"} sent.`;
+      setMessage(`Project \"${projectForm.title.trim()}\" was created for ${courseName}. ${emailSummary}`);
+    }
     await loadDashboard();
   };
 
@@ -510,7 +555,24 @@ export default function TrainerDashboard() {
   };
 
   if (!profile || loading) {
-    return <div className="cert-bg-trainer flex min-h-screen items-center justify-center p-6 text-cert-ink">Loading trainer workspace...</div>;
+    return (
+      <div className="cert-bg-trainer flex min-h-screen items-center justify-center p-6 text-cert-ink">
+        <div className="relative w-full max-w-xl overflow-hidden rounded-[2.5rem] border border-white/80 bg-white px-8 py-10 text-center shadow-[0_32px_90px_-42px_rgba(15,23,42,0.34)] sm:px-12 sm:py-12">
+          <div className="absolute -left-16 -top-16 h-40 w-40 rounded-full bg-cert-green/15 blur-2xl" />
+          <div className="absolute -bottom-20 -right-12 h-44 w-44 rounded-full bg-violet-100/80 blur-2xl" />
+          <div className="relative">
+            <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-cert-navy text-cert-yellow shadow-lg shadow-cert-navy/20"><Sparkles size={30} aria-hidden="true" /></span>
+            <p className="mt-6 text-xs font-bold uppercase tracking-[0.26em] text-cert-green-dark">Trainer workspace</p>
+            <p className="mt-3 text-3xl font-bold tracking-tight text-cert-ink sm:text-4xl">Welcome, {trainerName}!</p>
+            <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">We are opening your courses, learners, and student submissions.</p>
+            <div className="mx-auto mt-8 max-w-sm rounded-2xl border border-cert-line bg-cert-mint/70 p-4 text-left">
+              <div className="flex items-center justify-between gap-3 text-xs font-bold uppercase tracking-[0.14em] text-cert-green-dark"><span>Preparing your workspace</span><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-cert-green" /></div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-white"><div className="h-full w-2/3 animate-pulse rounded-full bg-[linear-gradient(90deg,#0c8a58,#31c96f,#e7e85b)]" /></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   const awaitingSubmissions = submissions.filter((submission) => (submission.status || "").toLowerCase() === "submitted");

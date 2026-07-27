@@ -262,6 +262,7 @@ export default function StudentDashboard() {
   const fileInputRef = useRef(null);
   const driveFolderInputRef = useRef(null);
   const githubFolderInputRef = useRef(null);
+  const studentName = profile?.full_name || profile?.name || user?.user_metadata?.full_name || "Student";
 
   useEffect(() => {
     if (!profile || !user) return;
@@ -795,9 +796,19 @@ export default function StudentDashboard() {
   if (loading) {
     return (
       <div className="cert-bg-student flex min-h-[calc(100vh-96px)] items-center justify-center px-4">
-        <div className="rounded-[2rem] border border-cert-line bg-white px-10 py-8 text-center shadow-[0_24px_70px_-45px_rgba(15,23,42,0.22)]">
-          <p className="text-lg font-semibold text-cert-ink">Loading student dashboard...</p>
-          <p className="mt-2 text-sm text-slate-500">Fetching your courses, trainer, and course work.</p>
+        <div className="relative w-full max-w-xl overflow-hidden rounded-[2.5rem] border border-white/80 bg-white px-8 py-10 text-center shadow-[0_32px_90px_-42px_rgba(15,23,42,0.34)] sm:px-12 sm:py-12">
+          <div className="absolute -left-16 -top-16 h-40 w-40 rounded-full bg-cert-green/15 blur-2xl" />
+          <div className="absolute -bottom-20 -right-12 h-44 w-44 rounded-full bg-sky-100/80 blur-2xl" />
+          <div className="relative">
+            <span className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-cert-navy text-cert-yellow shadow-lg shadow-cert-navy/20"><ShieldCheck size={31} aria-hidden="true" /></span>
+            <p className="mt-6 text-xs font-bold uppercase tracking-[0.26em] text-cert-green-dark">Student workspace</p>
+            <p className="mt-3 text-3xl font-bold tracking-tight text-cert-ink sm:text-4xl">Welcome, {studentName}!</p>
+            <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500">We are opening your courses, trainer details, and course work.</p>
+            <div className="mx-auto mt-8 max-w-sm rounded-2xl border border-cert-line bg-cert-mint/70 p-4 text-left">
+              <div className="flex items-center justify-between gap-3 text-xs font-bold uppercase tracking-[0.14em] text-cert-green-dark"><span>Preparing your learning space</span><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-cert-green" /></div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-white"><div className="h-full w-2/3 animate-pulse rounded-full bg-[linear-gradient(90deg,#0c8a58,#31c96f,#e7e85b)]" /></div>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -827,23 +838,22 @@ export default function StudentDashboard() {
         <span className="mt-6 text-xs font-semibold uppercase tracking-[0.2em] text-white/60">Student workspace</span>
         <div className="mt-3 flex flex-1 flex-col gap-2">
           <button type="button" onClick={() => openPanel("courses")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "courses" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
-            <span>Courses</span><span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{courses.length}</span>
+            <span>Courses</span>
           </button>
           <button type="button" onClick={() => openTaskPage("assignment")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "assignments" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
-            <span>Assignments</span><span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{assignmentTasks.length}</span>
+            <span>Assignments</span>
           </button>
           <button type="button" onClick={() => openTaskPage("project")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "projects" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
-            <span>Projects</span><span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{projectTasks.length}</span>
+            <span>Projects</span>
           </button>
           {[
-            ["Pending", taskStats.counts.pending || 0, "pending"],
-            ["Submitted", taskStats.counts.submitted || 0, "submitted"],
-            ["Approved", taskStats.counts.approved || 0, "approved"],
-            ["Rejected", taskStats.counts.rejected || 0, "rejected"],
-          ].map(([label, value, status]) => (
+            ["Pending", "pending"],
+            ["Submitted", "submitted"],
+            ["Approved", "approved"],
+            ["Rejected", "rejected"],
+          ].map(([label, status]) => (
             <button key={label} type="button" onClick={() => openPanel("task-status", { status })} className={`inline-flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold transition ${activePanel === "task-status" && taskStatusFilter === status ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/75 hover:bg-white/10"}`}>
               <span>{label}</span>
-              <span className="rounded-full bg-white px-2 py-0.5 text-cert-green-dark">{value}</span>
             </button>
           ))}
           <button type="button" onClick={() => openPanel("certificate")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "certificate" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>

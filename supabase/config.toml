@@ -20,6 +20,11 @@ enabled = true
 verify_jwt = true
 entrypoint = "./functions/send-certificate-email/index.ts"
 
+[functions.send-assignment-notifications]
+enabled = true
+verify_jwt = true
+entrypoint = "./functions/send-assignment-notifications/index.ts"
+
 [functions.submit-student-registration]
 enabled = true
 verify_jwt = false
