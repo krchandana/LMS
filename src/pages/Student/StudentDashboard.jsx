@@ -120,6 +120,14 @@ const formatCertificateDate = (value) => {
     : new Intl.DateTimeFormat(undefined, { day: "numeric", month: "long", year: "numeric" }).format(parsed);
 };
 
+const formatAttendanceDate = (value) => {
+  if (!value) return "Date unavailable";
+  const parsed = new Date(`${String(value).slice(0, 10)}T00:00:00`);
+  return Number.isNaN(parsed.getTime())
+    ? value
+    : new Intl.DateTimeFormat(undefined, { day: "numeric", month: "long", year: "numeric" }).format(parsed);
+};
+
 const escapeCertificateText = (value) => String(value || "").replace(/[&<>'"]/g, (character) => ({
   "&": "&amp;",
   "<": "&lt;",
@@ -245,6 +253,7 @@ export default function StudentDashboard() {
   const [tasks, setTasks] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [certificates, setCertificates] = useState([]);
+  const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [submissionTask, setSubmissionTask] = useState(null);
   const [workFiles, setWorkFiles] = useState([]);
   const [workSource, setWorkSource] = useState("");
@@ -258,6 +267,7 @@ export default function StudentDashboard() {
   const [taskStatusFilter, setTaskStatusFilter] = useState("");
   const [taskCourseFilter, setTaskCourseFilter] = useState("");
   const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [selectedAttendanceCourseId, setSelectedAttendanceCourseId] = useState("");
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
   const fileInputRef = useRef(null);
   const driveFolderInputRef = useRef(null);
@@ -422,6 +432,17 @@ export default function StudentDashboard() {
         (query) => query.in("profile_id", studentIds),
         (query) => query.eq("student_email", profile.email || user.email),
       ]);
+      const serviceAttendanceRows = courseIds.length
+        ? await fetchRowsWithServiceRole("attendance", { student_id: `in.(${studentIds.join(",")})` })
+        : emptyData;
+      const directAttendanceRows = serviceAttendanceRows.length
+        ? serviceAttendanceRows
+        : await firstWorkingList("attendance", [
+            (query) => query.in("student_id", studentIds).in("course_id", courseIds),
+          ]);
+      const attendanceRows = directAttendanceRows.filter((record) =>
+        studentIdKeys.has(String(record.student_id)) && courseIdKeys.has(String(record.course_id))
+      );
 
       setStudentRecord(student);
       setCourses(courseRowsWithTrainer);
@@ -429,6 +450,7 @@ export default function StudentDashboard() {
       setTasks(taskRows);
       setSubmissions(submissionRows);
       setCertificates(certificateRows);
+      setAttendanceRecords(attendanceRows);
       setLoading(false);
     };
 
@@ -526,6 +548,24 @@ export default function StudentDashboard() {
       eligible: totalTasks > 0 && approved === totalTasks,
     };
   }, [selectedCourse, taskSummaries]);
+  const attendanceByCourse = useMemo(() => {
+    const stats = new Map();
+    courses.forEach((course) => {
+      const courseId = String(course.id || course.course_id || "");
+      const records = attendanceRecords.filter((record) => String(record.course_id) === courseId);
+      const present = records.filter((record) => record.status === "present").length;
+      stats.set(courseId, { total: records.length, present, percentage: records.length ? Math.round((present / records.length) * 100) : 0 });
+    });
+    return stats;
+  }, [attendanceRecords, courses]);
+  const selectedAttendanceCourse = useMemo(
+    () => courses.find((course) => String(course.id || course.course_id) === selectedAttendanceCourseId) || null,
+    [courses, selectedAttendanceCourseId]
+  );
+  const selectedAttendanceRecords = useMemo(() => attendanceRecords
+    .filter((record) => String(record.course_id) === selectedAttendanceCourseId)
+    .sort((first, second) => String(second.attendance_date || "").localeCompare(String(first.attendance_date || ""))),
+    [attendanceRecords, selectedAttendanceCourseId]);
   const issuedCertificates = useMemo(() => certificates.map((certificate) => {
     const certificateCourseId = String(certificate.course_id || certificate.course || "");
     const course = courses.find((item) => String(item.id || item.course_id || "") === certificateCourseId) || null;
@@ -821,6 +861,7 @@ export default function StudentDashboard() {
         <button type="button" onClick={() => openPanel("courses")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "courses" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Courses</button>
         <button type="button" onClick={() => openTaskPage("assignment")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "assignments" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Assignments</button>
         <button type="button" onClick={() => openTaskPage("project")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "projects" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Projects</button>
+        <button type="button" onClick={() => openPanel("attendance")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "attendance" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Attendance</button>
         {[['Pending', 'pending'], ['Submitted', 'submitted'], ['Approved', 'approved'], ['Rejected', 'rejected']].map(([label, status]) => (
           <button key={status} type="button" onClick={() => openPanel("task-status", { status })} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "task-status" && taskStatusFilter === status ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>{label}</button>
         ))}
@@ -845,6 +886,9 @@ export default function StudentDashboard() {
           </button>
           <button type="button" onClick={() => openTaskPage("project")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "projects" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
             <span>Projects</span>
+          </button>
+          <button type="button" onClick={() => openPanel("attendance")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "attendance" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
+            <span>Attendance</span>
           </button>
           {[
             ["Pending", "pending"],
@@ -1086,6 +1130,11 @@ export default function StudentDashboard() {
             </div>
           </div>}
         </div>
+
+        <section className={activePanel === "attendance" ? "space-y-5" : "hidden"}>
+          <header className="overflow-hidden rounded-[2rem] bg-[radial-gradient(circle_at_88%_12%,rgba(231,232,91,0.28),transparent_24%),linear-gradient(135deg,#062239_0%,#08415a_56%,#0c8a58_135%)] px-6 py-7 text-white shadow-[0_24px_60px_-35px_rgba(7,26,47,0.5)]"><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-yellow">Attendance</p><h1 className="mt-2 text-3xl font-semibold">Your attendance record</h1><p className="mt-2 text-sm leading-6 text-emerald-50/85">Your trainer records attendance for each course session. Percentages update whenever a record is saved.</p></header>
+          {courses.length === 0 ? <div className="rounded-[2rem] border border-dashed border-cert-line bg-white px-6 py-12 text-center text-sm text-slate-500">Enroll in a course to see attendance.</div> : <><div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">{courses.map((course) => { const courseId = String(course.id || course.course_id || ""); const stats = attendanceByCourse.get(courseId) || { total: 0, present: 0, percentage: 0 }; const isSelected = selectedAttendanceCourseId === courseId; return <button type="button" key={courseId} onClick={() => setSelectedAttendanceCourseId(courseId)} aria-pressed={isSelected} className={`rounded-[2rem] border bg-white p-6 text-left shadow-[0_20px_50px_-35px_rgba(15,23,42,0.18)] transition hover:-translate-y-0.5 hover:border-cert-green hover:shadow-[0_24px_55px_-35px_rgba(15,23,42,0.28)] ${isSelected ? "border-cert-green ring-4 ring-cert-green/15" : "border-cert-line"}`}><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">{titleFor(course, "Course")}</p><div className="mt-5 flex items-end justify-between gap-4"><div><p className="text-4xl font-bold text-cert-ink">{stats.percentage}%</p><p className="mt-1 text-sm text-slate-500">Attendance percentage</p></div><span className={`rounded-full px-3 py-1.5 text-xs font-bold ${stats.percentage >= 75 ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-800"}`}>{stats.total ? `${stats.present}/${stats.total} present` : "No records yet"}</span></div><div className="mt-5 h-3 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-cert-green transition-all" style={{ width: `${stats.percentage}%` }} /></div><p className="mt-4 text-sm text-slate-600">{stats.total ? `You were present for ${stats.present} of ${stats.total} recorded sessions.` : "Your trainer has not recorded attendance for this course yet."}</p><p className="mt-5 text-sm font-semibold text-cert-green-dark">View date-wise attendance →</p></button>; })}</div>{selectedAttendanceCourse && <section className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_20px_50px_-35px_rgba(15,23,42,0.18)]"><header className="flex flex-wrap items-center justify-between gap-4 border-b border-cert-line bg-cert-mint/60 px-6 py-5"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Date-wise attendance</p><h2 className="mt-1 text-2xl font-semibold text-cert-ink">{titleFor(selectedAttendanceCourse, "Course")}</h2></div><span className="rounded-full bg-white px-3 py-1.5 text-sm font-semibold text-cert-ink ring-1 ring-cert-line">{selectedAttendanceRecords.length} {selectedAttendanceRecords.length === 1 ? "session" : "sessions"}</span></header>{selectedAttendanceRecords.length === 0 ? <p className="p-6 text-sm text-slate-500">No attendance has been recorded for this course yet.</p> : <div className="divide-y divide-cert-line">{selectedAttendanceRecords.map((record) => <div key={record.id || `${record.attendance_date}-${record.student_id}`} className="flex items-center justify-between gap-4 px-6 py-4"><p className="font-semibold text-cert-ink">{formatAttendanceDate(record.attendance_date)}</p><span className={`rounded-full px-3 py-1.5 text-sm font-bold ${record.status === "present" ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>{record.status === "present" ? "Present" : "Absent"}</span></div>)}</div>}</section>}</>}
+        </section>
 
         <div className={activePanel === "certificate" ? "space-y-5" : "hidden"}>
           {issuedCertificates.length ? (

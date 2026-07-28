@@ -32,6 +32,76 @@ const formatVideoAvailability = (date) => {
     : `Available ${new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }).format(parsed)}`;
 };
 const videoIsActive = (video) => Boolean(video?.available_at) && new Date(video.available_at).getTime() <= Date.now();
+const xmlEscape = (value) => String(value ?? "").replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&apos;", '"': "&quot;" }[character]));
+const xlsxCrcTable = (() => Array.from({ length: 256 }, (_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? (value >>> 1) ^ 0xedb88320 : value >>> 1;
+  return value >>> 0;
+}))();
+const xlsxCrc32 = (bytes) => {
+  let value = 0xffffffff;
+  bytes.forEach((byte) => { value = (value >>> 8) ^ xlsxCrcTable[(value ^ byte) & 0xff]; });
+  return (value ^ 0xffffffff) >>> 0;
+};
+const xlsxBytes = (chunks) => {
+  const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const output = new Uint8Array(length);
+  let offset = 0;
+  chunks.forEach((chunk) => { output.set(chunk, offset); offset += chunk.length; });
+  return output;
+};
+const createXlsxWorkbook = (files) => {
+  const encoder = new TextEncoder();
+  const entries = files.map(({ name, content }) => ({ name: encoder.encode(name), data: encoder.encode(content) }));
+  let offset = 0;
+  const localFiles = [];
+  const centralFiles = [];
+
+  entries.forEach((entry) => {
+    const crc = xlsxCrc32(entry.data);
+    const local = new Uint8Array(30 + entry.name.length + entry.data.length);
+    const localView = new DataView(local.buffer);
+    localView.setUint32(0, 0x04034b50, true);
+    localView.setUint16(4, 20, true);
+    localView.setUint32(14, crc, true);
+    localView.setUint32(18, entry.data.length, true);
+    localView.setUint32(22, entry.data.length, true);
+    localView.setUint16(26, entry.name.length, true);
+    local.set(entry.name, 30);
+    local.set(entry.data, 30 + entry.name.length);
+    localFiles.push(local);
+
+    const central = new Uint8Array(46 + entry.name.length);
+    const centralView = new DataView(central.buffer);
+    centralView.setUint32(0, 0x02014b50, true);
+    centralView.setUint16(4, 20, true);
+    centralView.setUint16(6, 20, true);
+    centralView.setUint32(16, crc, true);
+    centralView.setUint32(20, entry.data.length, true);
+    centralView.setUint32(24, entry.data.length, true);
+    centralView.setUint16(28, entry.name.length, true);
+    centralView.setUint32(42, offset, true);
+    central.set(entry.name, 46);
+    centralFiles.push(central);
+    offset += local.length;
+  });
+
+  const centralDirectory = xlsxBytes(centralFiles);
+  const footer = new Uint8Array(22);
+  const footerView = new DataView(footer.buffer);
+  footerView.setUint32(0, 0x06054b50, true);
+  footerView.setUint16(8, entries.length, true);
+  footerView.setUint16(10, entries.length, true);
+  footerView.setUint32(12, centralDirectory.length, true);
+  footerView.setUint32(16, offset, true);
+  return xlsxBytes([...localFiles, centralDirectory, footer]);
+};
+const spreadsheetColumn = (index) => {
+  let value = index + 1;
+  let column = "";
+  while (value) { const remainder = (value - 1) % 26; column = String.fromCharCode(65 + remainder) + column; value = Math.floor((value - 1) / 26); }
+  return column;
+};
 
 const instructionLabels = "Objective|Dataset(?:\\s+(?:Columns|Requirements))?|Requirements?|Tasks?|Expected Output|Deliverables?|Steps?|Code";
 const instructionHeadingPattern = new RegExp(`(?:^|\\n\\n)(${instructionLabels}):\\s*`, "gi");
@@ -144,11 +214,14 @@ export default function TrainerDashboard() {
   const [certificates, setCertificates] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [courseVideos, setCourseVideos] = useState([]);
+  const [attendance, setAttendance] = useState([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [assignmentForm, setAssignmentForm] = useState({ courseId: "", title: "", description: "", assignedDate: currentDate, endDate: "" });
   const [projectForm, setProjectForm] = useState({ courseId: "", title: "", description: "", assignedDate: currentDate, endDate: "" });
   const [videoForm, setVideoForm] = useState({ courseId: "", title: "", lessonDate: new Date().toISOString().slice(0, 10), videoUrl: "" });
+  const [attendanceForm, setAttendanceForm] = useState({ courseId: "", attendanceDate: currentDate });
+  const [attendanceMarks, setAttendanceMarks] = useState({});
   const [reviewNotes, setReviewNotes] = useState({});
   const [activeWorkspace, setActiveWorkspace] = useState("overview");
   const trainerName = profile?.full_name || profile?.name || "Trainer";
@@ -221,6 +294,12 @@ export default function TrainerDashboard() {
     const videoRows = allCourseVideos
       .filter((video) => courseIds.some((courseId) => String(courseId) === String(video.course_id)))
       .sort((first, second) => String(second.created_at || "").localeCompare(String(first.created_at || "")));
+    const allAttendance = courseIds.length
+      ? (hasServiceRoleKey
+        ? await fetchRowsWithServiceRole("attendance")
+        : await fetchRows("attendance", (query) => query.in("course_id", courseIds)))
+      : [];
+    const attendanceRows = allAttendance.filter((record) => courseIds.some((courseId) => String(courseId) === String(record.course_id)));
 
     setCourses(trainerCourses);
     setEnrollments(enrollmentRows);
@@ -231,6 +310,7 @@ export default function TrainerDashboard() {
     setCertificates(certificateRows);
     setNotifications(notificationRows);
     setCourseVideos(videoRows);
+    setAttendance(attendanceRows);
     setLoading(false);
   };
 
@@ -292,6 +372,26 @@ export default function TrainerDashboard() {
       .map((row) => row.student_id || row.profile_id || row.user_id)
       .filter(Boolean)
   )];
+
+  const attendanceStudents = useMemo(() => enrolledStudentIds(attendanceForm.courseId)
+    .map((studentId) => studentById.get(String(studentId)))
+    .filter(Boolean), [attendanceForm.courseId, enrollments, studentById]);
+  const courseAttendanceSheet = useMemo(() => attendance
+    .filter((record) => String(record.course_id) === String(attendanceForm.courseId))
+    .map((record) => ({ record, student: studentById.get(String(record.student_id)) }))
+    .sort((first, second) => String(first.record.attendance_date || "").localeCompare(String(second.record.attendance_date || ""))
+      || titleFor(first.student, "Student").localeCompare(titleFor(second.student, "Student"))), [attendance, attendanceForm.courseId, studentById]);
+
+  useEffect(() => {
+    const existingMarks = attendance.reduce((marks, record) => {
+      if (String(record.course_id) === String(attendanceForm.courseId)
+        && record.attendance_date === attendanceForm.attendanceDate) {
+        marks[record.student_id] = record.status;
+      }
+      return marks;
+    }, {});
+    setAttendanceMarks(existingMarks);
+  }, [attendance, attendanceForm.courseId, attendanceForm.attendanceDate]);
 
   const handleLogout = async () => {
     await supabase.auth.signOut();
@@ -462,6 +562,75 @@ export default function TrainerDashboard() {
     await loadDashboard();
   };
 
+  const saveAttendance = async (event) => {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    if (!attendanceForm.courseId || !attendanceForm.attendanceDate) {
+      setError("Select a course and attendance date.");
+      return;
+    }
+    if (!attendanceStudents.length) {
+      setError("This course has no enrolled students.");
+      return;
+    }
+    const unmarkedStudent = attendanceStudents.find((student) => !["present", "absent"].includes(attendanceMarks[student.id]));
+    if (unmarkedStudent) {
+      setError(`Mark ${titleFor(unmarkedStudent, "every student")} as present or absent before saving.`);
+      return;
+    }
+    const rows = attendanceStudents.map((student) => ({
+      student_id: student.id,
+      course_id: attendanceForm.courseId,
+      attendance_date: attendanceForm.attendanceDate,
+      status: attendanceMarks[student.id],
+    }));
+    const { error: attendanceError } = await supabase
+      .from("attendance")
+      .upsert(rows, { onConflict: "student_id,course_id,attendance_date" });
+    if (attendanceError) {
+      setError(attendanceError.message || "Unable to save attendance.");
+      return;
+    }
+    setMessage(`Attendance saved for ${attendanceStudents.length} ${attendanceStudents.length === 1 ? "student" : "students"}.`);
+    await loadDashboard();
+  };
+
+  const downloadAttendanceSheet = () => {
+    if (!attendanceForm.courseId || !courseAttendanceSheet.length) {
+      setError("Save attendance before exporting the Excel workbook.");
+      return;
+    }
+    const course = courseById.get(String(attendanceForm.courseId));
+    const rows = [
+      ["Course", "Date", "Student", "Email", "Attendance status"],
+      ...courseAttendanceSheet.map(({ student, record }) => [
+        titleFor(course, "Course"),
+        formatAssignmentDate(record.attendance_date),
+        titleFor(student, "Student"),
+        student?.email || "",
+        record.status === "present" ? "Present" : "Absent",
+      ]),
+    ];
+    const cell = (value, reference, style = "") => `<c r="${reference}" t="inlineStr"${style ? ` s="${style}"` : ""}><is><t>${xmlEscape(value)}</t></is></c>`;
+    const sheetRows = rows.map((row, rowIndex) => `<row r="${rowIndex + 1}">${row.map((value, columnIndex) => cell(value, `${spreadsheetColumn(columnIndex)}${rowIndex + 1}`, rowIndex === 0 ? "1" : "")).join("")}</row>`).join("");
+    const workbook = createXlsxWorkbook([
+      { name: "[Content_Types].xml", content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
+      { name: "_rels/.rels", content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+      { name: "xl/workbook.xml", content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Attendance" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+      { name: "xl/_rels/workbook.xml.rels", content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
+      { name: "xl/styles.xml", content: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE2F4E8"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="1" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs></styleSheet>' },
+      { name: "xl/worksheets/sheet1.xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:E${rows.length}"/><cols><col min="1" max="1" width="24" customWidth="1"/><col min="2" max="2" width="20" customWidth="1"/><col min="3" max="3" width="26" customWidth="1"/><col min="4" max="4" width="34" customWidth="1"/><col min="5" max="5" width="20" customWidth="1"/></cols><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetData>${sheetRows}</sheetData><autoFilter ref="A1:E${rows.length}"/></worksheet>` },
+    ]);
+    const blob = new Blob([workbook], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `attendance-${String(titleFor(course, "course")).replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}-all-dates.xlsx`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const completeCourseIfReady = async (studentId, courseId) => {
     const courseAssignments = await fetchRows("assignments", (query) => query.eq("course_id", courseId));
     const studentAssignments = courseAssignments.filter((assignment) =>
@@ -589,6 +758,7 @@ export default function TrainerDashboard() {
             <button type="button" onClick={() => openWorkspace("create-assignment")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "create-assignment" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Create assignment</button>
             <button type="button" onClick={() => openWorkspace("assign-project")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "assign-project" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Assign project</button>
             <button type="button" onClick={() => openWorkspace("add-videos")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "add-videos" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Video size={16} /> Add videos</button>
+            <button type="button" onClick={() => openWorkspace("attendance")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "attendance" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><ClipboardCheck size={16} /> Attendance</button>
             <button type="button" onClick={() => openWorkspace("certificate-approvals")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "certificate-approvals" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Award size={16} /> Certificates</button>
             <button type="button" onClick={() => { openWorkspace("project-reviews"); markNotificationsRead("project_submission"); }} className={`relative inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${projectReviewAlertCount > 0 ? "border-rose-300 bg-rose-50 text-rose-700 shadow-sm shadow-rose-100 hover:bg-rose-100" : activeWorkspace === "project-reviews" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Bell size={16} className={projectReviewAlertCount > 0 ? "text-rose-600" : ""} /> Project reviews{projectReviewAlertCount > 0 && <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[0.65rem] font-bold text-white">{projectReviewAlertCount}</span>}</button>
             <button type="button" onClick={() => { openWorkspace("assignment-submissions"); markNotificationsRead("assignment_submission"); }} className={`relative inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${assignmentReviewAlertCount > 0 ? "border-rose-300 bg-rose-50 text-rose-700 shadow-sm shadow-rose-100 hover:bg-rose-100" : activeWorkspace === "assignment-submissions" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Bell size={16} className={assignmentReviewAlertCount > 0 ? "text-rose-600" : ""} /> Assignment submissions{assignmentReviewAlertCount > 0 && <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[0.65rem] font-bold text-white">{assignmentReviewAlertCount}</span>}</button>
@@ -733,6 +903,18 @@ export default function TrainerDashboard() {
             <header className="flex items-start justify-between gap-4 border-b border-cert-line bg-[linear-gradient(135deg,#f4fff8_0%,#e9f8ef_100%)] px-6 py-6"><div><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Video library</p><h2 className="mt-2 text-2xl font-semibold tracking-tight text-cert-ink">Posted course videos</h2><p className="mt-1 text-sm text-slate-500">Students can watch videos as soon as they become available.</p></div><span className="flex min-w-12 items-center justify-center rounded-2xl bg-white px-3 py-3 text-lg font-bold text-cert-green-dark ring-1 ring-cert-line">{courseVideos.length}</span></header>
             <div className="max-h-[42rem] space-y-4 overflow-y-auto p-5 sm:p-6">{courseVideos.length === 0 ? <div className="rounded-[1.35rem] border border-dashed border-cert-line bg-[linear-gradient(135deg,#f6fffa_0%,#edf8f2_100%)] px-6 py-12 text-center"><span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-cert-green-dark shadow-sm ring-1 ring-cert-line"><Video size={27} /></span><h3 className="mt-4 text-lg font-semibold text-cert-ink">No videos posted yet</h3><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-slate-500">Post the first course lesson to make it available to enrolled students.</p></div> : courseVideos.map((video) => <article key={video.id} className="rounded-2xl border border-cert-line bg-white p-4 shadow-[0_12px_28px_-24px_rgba(7,26,47,0.35)]"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-semibold text-cert-ink">{video.title || "Course video"}</p><p className="mt-1 text-sm text-slate-600">{titleFor(courseById.get(String(video.course_id)), "Course")}</p></div><span className={`rounded-full px-3 py-1 text-xs font-bold ${videoIsActive(video) ? "bg-emerald-50 text-emerald-600" : "bg-amber-50 text-amber-700"}`}>{videoIsActive(video) ? "Live" : "Scheduled"}</span></div><div className="mt-4 flex items-center justify-between gap-3 border-t border-cert-line pt-3"><p className="text-xs text-slate-500">{formatVideoAvailability(video.available_at)}</p><a href={video.video_url} target="_blank" rel="noreferrer" className="text-sm font-semibold text-cert-green-dark underline">Open video</a></div></article>)}</div>
           </aside>
+        </section>}
+
+        {activeWorkspace === "attendance" && <section className="overflow-hidden rounded-[1.9rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
+          <header className="relative overflow-hidden bg-[radial-gradient(circle_at_88%_12%,rgba(231,232,91,0.3),transparent_30%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_140%)] px-6 py-7 text-white"><div className="absolute -bottom-10 right-7 h-28 w-28 rounded-full border border-white/10" /><div className="relative"><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-yellow">Attendance register</p><h2 className="mt-2 inline-flex items-center gap-2 text-2xl font-semibold"><ClipboardCheck size={22} /> Mark course attendance</h2><p className="mt-2 text-sm leading-6 text-emerald-50/85">Choose a course and date, then record every enrolled student's attendance.</p></div></header>
+          <form onSubmit={saveAttendance} className="p-5 sm:p-6">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="text-sm font-semibold text-cert-ink">Course<select value={attendanceForm.courseId} onChange={(event) => setAttendanceForm({ ...attendanceForm, courseId: event.target.value })} className="mt-2 w-full rounded-xl border border-cert-line bg-cert-mint px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select></label>
+              <label className="text-sm font-semibold text-cert-ink">Date<input type="date" value={attendanceForm.attendanceDate} onChange={(event) => setAttendanceForm({ ...attendanceForm, attendanceDate: event.target.value })} className="mt-2 w-full rounded-xl border border-cert-line bg-cert-mint px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label>
+            </div>
+            {!attendanceForm.courseId ? <div className="mt-6 rounded-2xl border border-dashed border-cert-line bg-cert-mint/60 px-5 py-10 text-center text-sm text-slate-500">Select a course to view its enrolled students.</div> : attendanceStudents.length === 0 ? <div className="mt-6 rounded-2xl border border-dashed border-cert-line bg-cert-mint/60 px-5 py-10 text-center text-sm text-slate-500">No students are enrolled in this course.</div> : <div className="mt-6 overflow-hidden rounded-2xl border border-cert-line"><div className="grid grid-cols-[minmax(0,1fr)_9rem] gap-3 bg-cert-mint px-4 py-3 text-xs font-bold uppercase tracking-[0.14em] text-cert-green-dark"><span>Student</span><span>Attendance</span></div>{attendanceStudents.map((student) => <div key={student.id} className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-3 border-t border-cert-line px-4 py-3"><div><p className="font-semibold text-cert-ink">{titleFor(student, "Student")}</p><p className="mt-1 text-xs text-slate-500">{student.email || ""}</p></div><select value={attendanceMarks[student.id] || ""} onChange={(event) => setAttendanceMarks({ ...attendanceMarks, [student.id]: event.target.value })} className="rounded-xl border border-cert-line bg-white px-3 py-2 text-sm font-semibold text-cert-ink outline-none focus:border-cert-green"><option value="">Mark status</option><option value="present">Present</option><option value="absent">Absent</option></select></div>)}</div>}
+            <div className="mt-6 flex flex-wrap items-center gap-3"><button type="submit" disabled={!attendanceStudents.length} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[linear-gradient(135deg,#0d8f55_0%,#31c96f_100%)] px-5 py-3.5 font-semibold text-cert-ink shadow-[0_16px_28px_-18px_rgba(13,143,85,0.7)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:bg-slate-300">Save attendance</button><button type="button" onClick={downloadAttendanceSheet} disabled={!courseAttendanceSheet.length} className="rounded-xl border border-cert-line bg-white px-5 py-3.5 text-sm font-semibold text-cert-ink transition hover:border-cert-green hover:bg-cert-mint disabled:cursor-not-allowed disabled:text-slate-400">Download all dates (.xlsx)</button>{courseAttendanceSheet.length > 0 && <span className="text-sm text-cert-green-dark">{courseAttendanceSheet.length} saved record{courseAttendanceSheet.length === 1 ? "" : "s"} ready to export.</span>}</div>
+          </form>
         </section>}
 
         {activeWorkspace === "certificate-approvals" && <section className="overflow-hidden rounded-[1.9rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
