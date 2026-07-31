@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CheckCircle2, Eye, EyeOff, ShieldCheck, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabaseClient";
@@ -111,11 +111,25 @@ const TrainerLogin = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [trainerName, setTrainerName] = useState("");
   const [password, setPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const hasRecoveryLink = new URLSearchParams(window.location.search).has("code") || window.location.hash.includes("type=recovery");
+    const openResetPage = () => navigate(`/trainer-reset-password${window.location.search}${window.location.hash}`, { replace: true });
+    if (hasRecoveryLink) openResetPage();
+
+    const { data: listener } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY") openResetPage();
+    });
+    return () => listener.subscription.unsubscribe();
+  }, [navigate]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -126,6 +140,16 @@ const TrainerLogin = () => {
     const normalizedId = trainerName.trim();
     if (!normalizedId) {
       setError("Please enter your full name.");
+      setIsSubmitting(false);
+      return;
+    }
+    if (isChangingPassword && newPassword.length < 6) {
+      setError("Use a new password with at least 6 characters.");
+      setIsSubmitting(false);
+      return;
+    }
+    if (isChangingPassword && newPassword !== confirmNewPassword) {
+      setError("The new passwords do not match.");
       setIsSubmitting(false);
       return;
     }
@@ -151,13 +175,30 @@ const TrainerLogin = () => {
       password,
     });
 
-    setIsSubmitting(false);
-
     if (signInError) {
-      setError(signInError.message);
+      setError(isChangingPassword ? "The trainer name or current password is incorrect." : signInError.message);
+      setIsSubmitting(false);
       return;
     }
 
+    if (isChangingPassword) {
+      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
+      setIsSubmitting(false);
+      if (updateError) {
+        setError(updateError.message || "Unable to update your password.");
+        return;
+      }
+
+      await supabase.auth.signOut();
+      setPassword("");
+      setNewPassword("");
+      setConfirmNewPassword("");
+      setIsChangingPassword(false);
+      setSuccess("Password updated. Sign in with your new password.");
+      return;
+    }
+
+    setIsSubmitting(false);
     navigate("/trainer", { replace: true });
   };
 
@@ -191,7 +232,7 @@ const TrainerLogin = () => {
     }
 
     const { error: resetError } = await supabase.auth.resetPasswordForEmail(trainerEmail, {
-      redirectTo: `${window.location.origin}/trainer-login`,
+      redirectTo: `${window.location.origin}/trainer-reset-password`,
     });
 
     setIsResetting(false);
@@ -240,8 +281,8 @@ const TrainerLogin = () => {
         <main className="flex min-h-[calc(100vh-4rem)] items-center justify-center bg-[radial-gradient(circle_at_88%_3%,rgba(49,201,111,0.12),transparent_27%),linear-gradient(180deg,#ffffff_0%,#f8fcf9_100%)] p-5 sm:p-10 lg:min-h-0 lg:p-12">
           <div className="w-full max-w-md rounded-[2rem] border border-cert-line bg-white p-8 shadow-[0_20px_60px_-35px_rgba(15,23,42,0.18)] sm:p-10">
             <p className="text-xs font-semibold uppercase tracking-[0.3em] text-cert-green-dark">Welcome back</p>
-            <h2 className="mt-3 text-3xl font-semibold tracking-tight text-cert-ink">Trainer login</h2>
-            <p className="mt-3 text-sm leading-6 text-slate-500">Use your trainer name and password to continue.</p>
+            <h2 className="mt-3 text-3xl font-semibold tracking-tight text-cert-ink">{isChangingPassword ? "Change password" : "Trainer login"}</h2>
+            <p className="mt-3 text-sm leading-6 text-slate-500">{isChangingPassword ? "Enter your trainer name and current password, then choose a new password." : "Use your trainer name and password to continue."}</p>
 
             <form onSubmit={handleLogin} className="mt-8 space-y-5">
               <div>
@@ -258,11 +299,11 @@ const TrainerLogin = () => {
               </div>
 
               <div>
-                <label className="mb-2 block text-sm font-medium text-cert-ink">Password</label>
+                <label className="mb-2 block text-sm font-medium text-cert-ink">{isChangingPassword ? "Current password" : "Password"}</label>
                 <div className="relative">
                   <input
                     type={showPassword ? "text" : "password"}
-                    placeholder="Enter your password"
+                    placeholder={isChangingPassword ? "Enter your current password" : "Enter your password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="w-full rounded-3xl border border-cert-line bg-cert-mint px-4 py-3 pr-12 text-cert-ink outline-none focus:border-cert-green focus:ring-2 focus:ring-cert-green/20"
@@ -278,6 +319,17 @@ const TrainerLogin = () => {
                 </div>
               </div>
 
+              {isChangingPassword && <>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-cert-ink">New password</label>
+                  <input type={showPassword ? "text" : "password"} placeholder="Enter a new password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} className="w-full rounded-3xl border border-cert-line bg-cert-mint px-4 py-3 text-cert-ink outline-none focus:border-cert-green focus:ring-2 focus:ring-cert-green/20" minLength="6" required />
+                </div>
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-cert-ink">Confirm new password</label>
+                  <input type={showPassword ? "text" : "password"} placeholder="Enter the new password again" value={confirmNewPassword} onChange={(event) => setConfirmNewPassword(event.target.value)} className="w-full rounded-3xl border border-cert-line bg-cert-mint px-4 py-3 text-cert-ink outline-none focus:border-cert-green focus:ring-2 focus:ring-cert-green/20" minLength="6" required />
+                </div>
+              </>}
+
               {error && (
                 <p className="rounded-3xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>
               )}
@@ -291,17 +343,25 @@ const TrainerLogin = () => {
                 disabled={isSubmitting}
                 className="inline-flex w-full items-center justify-center rounded-3xl bg-cert-green px-4 py-3 text-cert-ink font-semibold transition hover:bg-cert-green-dark hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isSubmitting ? "Logging in..." : "Trainer Login"}
+                {isSubmitting ? (isChangingPassword ? "Updating password..." : "Logging in...") : (isChangingPassword ? "Update password" : "Trainer Login")}
               </button>
 
               <button
+                type="button"
+                onClick={() => { setIsChangingPassword((value) => !value); setError(""); setSuccess(""); setNewPassword(""); setConfirmNewPassword(""); }}
+                className="inline-flex w-full items-center justify-center rounded-3xl border border-cert-line bg-white px-4 py-3 text-sm font-semibold text-cert-ink transition hover:bg-slate-50"
+              >
+                {isChangingPassword ? "Back to trainer login" : "Change password"}
+              </button>
+
+              {!isChangingPassword && <button
                 type="button"
                 onClick={handleResetPassword}
                 disabled={isResetting}
                 className="inline-flex w-full items-center justify-center rounded-3xl border border-cert-line bg-white px-4 py-3 text-sm font-semibold text-cert-ink transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isResetting ? "Sending reset link..." : "Reset password"}
-              </button>
+              </button>}
             </form>
           </div>
         </main>

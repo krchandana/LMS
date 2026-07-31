@@ -566,11 +566,21 @@ export default function StudentDashboard() {
     .filter((record) => String(record.course_id) === selectedAttendanceCourseId)
     .sort((first, second) => String(second.attendance_date || "").localeCompare(String(first.attendance_date || ""))),
     [attendanceRecords, selectedAttendanceCourseId]);
-  const issuedCertificates = useMemo(() => certificates.map((certificate) => {
-    const certificateCourseId = String(certificate.course_id || certificate.course || "");
-    const course = courses.find((item) => String(item.id || item.course_id || "") === certificateCourseId) || null;
-    return { certificate, course };
-  }), [certificates, courses]);
+  const issuedCertificates = useMemo(() => {
+    const seen = new Set();
+    return certificates
+      .filter((certificate) => {
+        const key = `${certificate.student_id || certificate.profile_id || "unknown"}-${certificate.course_id || certificate.course || "unknown"}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .map((certificate) => {
+        const certificateCourseId = String(certificate.course_id || certificate.course || "");
+        const course = courses.find((item) => String(item.id || item.course_id || "") === certificateCourseId) || null;
+        return { certificate, course };
+      });
+  }, [certificates, courses]);
   const selectedCourseVideoRecord = useMemo(() => {
     const selectedCourseKey = String(selectedCourse?.id || selectedCourse?.course_id || "");
     const now = Date.now();
@@ -856,7 +866,7 @@ export default function StudentDashboard() {
 
   return (
     <div className="min-h-screen bg-[#f5f8fc] text-cert-ink">
-      <div className="mx-auto max-w-[1440px]">
+      <div className="w-full">
       <nav className="sticky top-0 z-30 flex gap-2 overflow-x-auto border-b border-cert-line bg-white/95 px-4 py-3 shadow-sm backdrop-blur lg:hidden" aria-label="Student workspace navigation">
         <button type="button" onClick={() => openPanel("courses")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "courses" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Courses</button>
         <button type="button" onClick={() => openTaskPage("assignment")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "assignments" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Assignments</button>
@@ -976,7 +986,7 @@ export default function StudentDashboard() {
         </div>
       </section>
 
-      <section id="student-panel" className="mx-auto max-w-7xl scroll-mt-28">
+      <section id="student-panel" className="w-full scroll-mt-28">
         <div id="enrolled-courses" className={`grid gap-6 xl:grid-cols-[1.05fr_0.95fr] ${activePanel === "courses" ? "" : "hidden"}`}>
           <div className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
             <h2 className="text-xl font-semibold text-cert-ink">Enrolled Courses</h2>

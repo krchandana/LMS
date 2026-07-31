@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Eye, EyeOff, GraduationCap, ShieldCheck, UsersRound } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
+import CertisuredBrand, { CertisuredMark } from "../components/CertisuredBrand";
 
 const approvedStudentStatuses = ["active", "approved"];
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
@@ -301,54 +302,14 @@ const LoginPage = () => {
   const [credential, setCredential] = useState("");
   const [studentEmail, setStudentEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [newTrainerPassword, setNewTrainerPassword] = useState("");
+  const [confirmTrainerPassword, setConfirmTrainerPassword] = useState("");
+  const [trainerPasswordMode, setTrainerPasswordMode] = useState(false);
   const [studentMode, setStudentMode] = useState("login");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isResetting, setIsResetting] = useState(false);
   const navigate = useNavigate();
-
-  const handleTrainerReset = async () => {
-    setError("");
-    setSuccess("");
-
-    const trainerName = credential.trim();
-    if (!trainerName) {
-      setError("Please enter your full name first.");
-      return;
-    }
-
-    setIsResetting(true);
-    let trainerEmail = trainerName.includes("@") ? trainerName.toLowerCase() : null;
-    if (!trainerEmail) {
-      try {
-        trainerEmail = await findTrainerEmailByName(trainerName);
-      } catch (err) {
-        setError(err?.message || "Unable to look up the trainer account.");
-        setIsResetting(false);
-        return;
-      }
-    }
-
-    if (!trainerEmail) {
-      setError("Trainer not found. Use the name saved by admin or your registered email.");
-      setIsResetting(false);
-      return;
-    }
-
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(trainerEmail, {
-      redirectTo: `${window.location.origin}/trainer-login`,
-    });
-
-    setIsResetting(false);
-
-    if (resetError) {
-      setError(resetError.message || "Unable to send password reset email.");
-      return;
-    }
-
-    setSuccess(`Password reset email sent to ${trainerEmail}.`);
-  };
 
   const submitStudentRequest = async (emailToUse) => {
     if (!studentName.trim()) {
@@ -392,6 +353,17 @@ const LoginPage = () => {
 
     if (!emailToUse) {
       setError(role === "trainer" ? "Please enter your full name." : role === "student" ? "Please enter your Student ID." : "Please enter your email.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    if (role === "trainer" && trainerPasswordMode && newTrainerPassword.length < 6) {
+      setError("Use a new password with at least 6 characters.");
+      setIsSubmitting(false);
+      return;
+    }
+    if (role === "trainer" && trainerPasswordMode && newTrainerPassword !== confirmTrainerPassword) {
+      setError("The new passwords do not match.");
       setIsSubmitting(false);
       return;
     }
@@ -489,23 +461,55 @@ const LoginPage = () => {
       password,
     });
 
-    setIsSubmitting(false);
-
     if (signInError) {
       if (role === "admin" && isAuthServiceUnavailable(signInError)) {
+        setIsSubmitting(false);
         navigate("/admin", { replace: true });
         return;
       }
 
-      setError(signInError.message);
+      setError(role === "trainer" && trainerPasswordMode ? "The trainer name or current password is incorrect." : signInError.message);
+      setIsSubmitting(false);
       return;
     }
 
     const user = data.user || data.session?.user;
     if (!user) {
+      setIsSubmitting(false);
       setError("Unable to log in. Please try again.");
       return;
     }
+
+    if (role === "trainer" && trainerPasswordMode) {
+      const { data: trainerProfile, error: trainerProfileError } = await supabase
+        .from("profiles")
+        .select("role")
+        .eq("id", user.id)
+        .single();
+      if (trainerProfileError || trainerProfile?.role !== "trainer") {
+        await supabase.auth.signOut();
+        setIsSubmitting(false);
+        setError("This account is not registered as a trainer.");
+        return;
+      }
+
+      const { error: updateError } = await supabase.auth.updateUser({ password: newTrainerPassword });
+      setIsSubmitting(false);
+      if (updateError) {
+        setError(updateError.message || "Unable to update your password.");
+        return;
+      }
+
+      await supabase.auth.signOut();
+      setPassword("");
+      setNewTrainerPassword("");
+      setConfirmTrainerPassword("");
+      setTrainerPasswordMode(false);
+      setSuccess("Password updated. Sign in with your new password.");
+      return;
+    }
+
+    setIsSubmitting(false);
 
     if (role === "admin") {
       const { error: adminProfileError } = await supabase.from("profiles").upsert(
@@ -565,21 +569,13 @@ const LoginPage = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_8%_8%,rgba(49,201,111,0.2),transparent_26%),radial-gradient(circle_at_92%_90%,rgba(231,232,91,0.22),transparent_24%),linear-gradient(135deg,#edf9f2_0%,#f6f9fc_52%,#e8f4ed_100%)] px-4 py-5 text-cert-ink sm:px-6 lg:px-8">
-      <div className="mx-auto grid min-h-[calc(100vh-2.5rem)] w-full max-w-7xl overflow-hidden rounded-[2rem] border border-white/80 bg-white shadow-[0_34px_90px_-52px_rgba(7,26,47,0.55)] lg:grid-cols-[0.95fr_1.05fr]">
+    <div className="min-h-screen bg-white text-cert-ink">
+      <div className="grid min-h-screen w-full overflow-hidden bg-white lg:grid-cols-[0.95fr_1.05fr]">
         <aside className="relative hidden min-h-full overflow-hidden bg-[radial-gradient(circle_at_12%_18%,rgba(49,201,111,0.24),transparent_28%),radial-gradient(circle_at_88%_78%,rgba(255,227,83,0.18),transparent_25%),linear-gradient(150deg,#041c30_0%,#06324f_55%,#075d4c_100%)] lg:block">
           <div className="absolute -right-32 top-24 h-72 w-72 rounded-full border border-white/10" />
           <div className="absolute -bottom-24 -left-16 h-72 w-72 rounded-full border border-white/10" />
           <div className="relative flex h-full flex-col justify-between p-8 xl:p-10">
-            <div className="inline-flex w-fit items-center gap-3 rounded-2xl border border-white/15 bg-white/10 px-3 py-3 shadow-xl shadow-black/10 backdrop-blur" aria-label="Certisured Learning Management System">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cert-green text-cert-ink shadow-lg shadow-black/20">
-                  <ShieldCheck size={29} aria-hidden="true" />
-                </div>
-                <div>
-                  <p className="text-base font-bold uppercase tracking-[0.22em] text-white">Certisured</p>
-                  <p className="mt-1 text-xs font-medium uppercase tracking-[0.14em] text-emerald-50/80">Learning Management System</p>
-                </div>
-            </div>
+            <CertisuredBrand />
             <div className="max-w-md pb-6 text-white">
               <p className="text-xs font-bold uppercase tracking-[0.25em] text-cert-yellow">Learn together</p>
               <blockquote className="mt-5 border-l-2 border-cert-green pl-5 text-3xl font-semibold leading-tight tracking-tight xl:text-4xl">
@@ -595,9 +591,7 @@ const LoginPage = () => {
           <div className="mx-auto w-full max-w-lg">
             <div className="mb-8 lg:hidden">
               <div className="inline-flex items-center gap-3" aria-label="Certisured Learning Management System">
-                <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cert-navy text-cert-green">
-                  <ShieldCheck size={25} aria-hidden="true" />
-                </div>
+                <CertisuredMark className="h-12 w-12" />
                 <div>
                   <p className="text-sm font-bold uppercase tracking-[0.2em] text-cert-green-dark">Certisured</p>
                   <p className="mt-1 text-[0.65rem] font-medium uppercase tracking-[0.12em] text-slate-500">Learning Management System</p>
@@ -618,6 +612,9 @@ const LoginPage = () => {
                     type="button"
                     onClick={() => {
                       setRole(id);
+                      setTrainerPasswordMode(false);
+                      setNewTrainerPassword("");
+                      setConfirmTrainerPassword("");
                       setError("");
                       setSuccess("");
                     }}
@@ -637,7 +634,7 @@ const LoginPage = () => {
             <section className="mt-7 rounded-[1.5rem] border border-slate-200/90 bg-white p-5 shadow-[0_24px_60px_-44px_rgba(15,23,42,0.26)] sm:p-7">
               <p className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-500">{role} login</p>
               <h2 className="mt-3 text-3xl font-semibold tracking-tight text-cert-ink">
-                {role === "student" && studentMode === "register" ? "Register for approval" : role === "student" && studentMode === "reset" ? "Reset student password" : "Sign in to your account"}
+                {role === "trainer" && trainerPasswordMode ? "Change trainer password" : role === "student" && studentMode === "register" ? "Register for approval" : role === "student" && studentMode === "reset" ? "Reset student password" : "Sign in to your account"}
               </h2>
               <form onSubmit={handleSubmit} className="mt-6 space-y-5">
               {role === "student" && (
@@ -694,13 +691,13 @@ const LoginPage = () => {
               </div>
               {(role !== "student" || (studentMode !== "reset" && studentMode !== "register")) && (
               <div>
-                <label className="block text-sm font-medium text-slate-700">Password</label>
+                <label className="block text-sm font-medium text-slate-700">{role === "trainer" && trainerPasswordMode ? "Current password" : "Password"}</label>
                 <div className="relative mt-2">
                   <input
                     type={showPassword ? "text" : "password"}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
-                    placeholder="Enter your password"
+                    placeholder={role === "trainer" && trainerPasswordMode ? "Enter your current password" : "Enter your password"}
                     className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 pr-12 text-cert-ink outline-none transition focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"
                     required
                   />
@@ -714,6 +711,19 @@ const LoginPage = () => {
                   </button>
                 </div>
               </div>
+              )}
+
+              {role === "trainer" && trainerPasswordMode && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700">New password</label>
+                    <input type={showPassword ? "text" : "password"} value={newTrainerPassword} onChange={(event) => setNewTrainerPassword(event.target.value)} placeholder="Enter a new password" className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-cert-ink outline-none transition focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" minLength="6" required />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700">Confirm new password</label>
+                    <input type={showPassword ? "text" : "password"} value={confirmTrainerPassword} onChange={(event) => setConfirmTrainerPassword(event.target.value)} placeholder="Enter the new password again" className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-cert-ink outline-none transition focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" minLength="6" required />
+                  </div>
+                </>
               )}
 
               {error && <p className="rounded-xl border border-rose-100 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p>}
@@ -733,17 +743,22 @@ const LoginPage = () => {
                         ? "Request password reset"
                         : "Sign in as student"
                   : isSubmitting
-                    ? "Signing in..."
-                    : `Sign in as ${role}`}
+                    ? trainerPasswordMode ? "Updating password..." : "Signing in..."
+                    : trainerPasswordMode ? "Update password" : `Sign in as ${role}`}
               </button>
               {role === "trainer" && (
                 <button
                   type="button"
-                  onClick={handleTrainerReset}
-                  disabled={isResetting}
+                  onClick={() => {
+                    setTrainerPasswordMode((value) => !value);
+                    setNewTrainerPassword("");
+                    setConfirmTrainerPassword("");
+                    setError("");
+                    setSuccess("");
+                  }}
                   className="mt-3 w-full rounded-xl border border-slate-200 bg-white px-4 py-3.5 text-sm font-semibold text-cert-ink transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {isResetting ? "Sending reset link..." : "Reset password"}
+                  {trainerPasswordMode ? "Back to trainer login" : "Change password"}
                 </button>
               )}
               </form>

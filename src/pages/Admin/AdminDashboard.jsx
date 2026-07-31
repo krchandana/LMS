@@ -17,6 +17,7 @@ import {
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
+import CertisuredBrand from "../../components/CertisuredBrand";
 
 const tabs = [
   { key: "overview", label: "Overview", path: "/admin", icon: ShieldCheck },
@@ -1037,6 +1038,18 @@ export default function AdminDashboard() {
     };
   }, [courses, enrichedStudents, requests.length, trainers.length]);
 
+  const uniqueCertificates = useMemo(() => {
+    const seen = new Set();
+    return certificates.filter((certificate) => {
+      const studentId = certificate.student_id || certificate.profile_id;
+      const courseId = certificate.course_id || certificate.course;
+      const key = `${studentId || "unknown"}-${courseId || "unknown"}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [certificates]);
+
   const monitoringInsights = useMemo(() => {
     const now = new Date();
     const activeStudents = enrichedStudents.filter((student) => (student.status || "active").toLowerCase() === "active");
@@ -1951,9 +1964,9 @@ export default function AdminDashboard() {
   }
 
   return (
-    <div className="cert-bg-admin min-h-screen px-4 py-5 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl space-y-6">
-        <section className="cert-glass-panel rounded-[1.6rem] p-3 shadow-[0_18px_45px_-32px_rgba(7,26,47,0.18)]">
+    <div className="cert-bg-admin min-h-screen">
+      <div className="w-full space-y-0">
+        <section className="cert-glass-panel border-b border-cert-line p-3">
           <div className="flex items-center gap-2">
             <div className="flex flex-1 flex-wrap gap-2">
               {tabs.map(({ key, label, path, icon: Icon }) => {
@@ -2000,17 +2013,12 @@ export default function AdminDashboard() {
           </div>
         </section>
 
-        {activeTab === "overview" && <section className="cert-glass-panel overflow-hidden rounded-[2.5rem] shadow-[0_28px_85px_-48px_rgba(7,26,47,0.38)]">
+        {activeTab === "overview" && <section className="cert-glass-panel overflow-hidden">
           <div className="grid lg:grid-cols-[1.15fr_0.85fr]">
             <div className="relative overflow-hidden bg-[linear-gradient(180deg,#061e33_0%,#06324f_56%,#10945a_100%)] p-6 text-white sm:p-8 lg:p-10">
               <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(231,232,91,0.18),transparent_34%),radial-gradient(circle_at_bottom_left,rgba(49,201,111,0.2),transparent_36%)]" />
               <div className="relative flex h-full min-h-[22rem] flex-col justify-between gap-5">
-                <div className="inline-flex w-fit items-center gap-3 rounded-2xl bg-white px-4 py-3 shadow-[0_16px_36px_-24px_rgba(0,0,0,0.75)]">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-cert-ink text-cert-green">
-                    <ShieldCheck size={28} strokeWidth={2.75} aria-hidden="true" />
-                  </span>
-                  <span className="text-2xl font-black tracking-tight text-cert-ink sm:text-3xl">CERTISURED</span>
-                </div>
+                <CertisuredBrand />
                 <img
                   src="/images/certisured-growth.png"
                   alt="A learner climbing toward achievement on growing course progress bars"
@@ -2123,7 +2131,7 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "trainers" && (
-          <section className="mx-auto grid w-full max-w-7xl gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
+          <section className="grid w-full gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
               <div className="space-y-3">
                 {trainers.length === 0 && <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">No trainers found.</p>}
                 {trainers.map((trainer) => {
@@ -2300,7 +2308,7 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "courses" && (
-          <section className="mx-auto grid w-full max-w-7xl gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
+          <section className="grid w-full gap-5 xl:grid-cols-[minmax(0,1.45fr)_minmax(20rem,0.75fr)]">
               <div className="space-y-5">
                 {courses.length === 0 && <p className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">No courses available.</p>}
                 {courses.map((course) => {
@@ -2389,7 +2397,7 @@ export default function AdminDashboard() {
         )}
 
         {activeTab === "mapping" && (
-          <section className="mx-auto w-full max-w-4xl">
+          <section className="w-full">
             <form onSubmit={saveMapping} className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.22)]">
               <div className="relative overflow-hidden bg-[radial-gradient(circle_at_90%_16%,rgba(231,232,91,0.3),transparent_28%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_130%)] px-6 py-7 text-white sm:px-8">
                 <div className="absolute -bottom-10 right-8 h-28 w-28 rounded-full border border-white/10" />
@@ -2500,12 +2508,12 @@ export default function AdminDashboard() {
                   <h2 className="mt-2 text-2xl font-semibold text-cert-ink">Issued certificates</h2>
                   <p className="mt-2 text-sm text-slate-500">Certificates are created automatically after a trainer approves every required assignment and project.</p>
                 </div>
-                <span className="rounded-full bg-cert-mint px-3 py-1.5 text-sm font-semibold text-cert-green-dark">{certificates.length}</span>
+                <span className="rounded-full bg-cert-mint px-3 py-1.5 text-sm font-semibold text-cert-green-dark">{uniqueCertificates.length}</span>
               </div>
               <div className="mt-6 space-y-3">
-                {certificates.length === 0 ? (
+                {uniqueCertificates.length === 0 ? (
                   <p className="rounded-2xl bg-cert-mint px-4 py-5 text-sm text-slate-500">No certificates have been issued yet.</p>
-                ) : certificates.map((certificate) => (
+                ) : uniqueCertificates.map((certificate) => (
                   <article key={certificate.id || `${certificate.student_id}-${certificate.course_id}`} className="flex flex-col gap-4 rounded-2xl border border-cert-line bg-slate-50/70 p-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-center gap-3">
                       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-cert-ink text-cert-green"><Award size={21} aria-hidden="true" /></span>
