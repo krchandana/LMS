@@ -254,6 +254,10 @@ export default function StudentDashboard() {
   const [tasks, setTasks] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [certificates, setCertificates] = useState([]);
+  const [certificateTests, setCertificateTests] = useState([]);
+  const [certificateTestAnswers, setCertificateTestAnswers] = useState({});
+  const [certificateTestMessage, setCertificateTestMessage] = useState("");
+  const [submittingCertificateTestId, setSubmittingCertificateTestId] = useState("");
   const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [submissionTask, setSubmissionTask] = useState(null);
   const [workFiles, setWorkFiles] = useState([]);
@@ -434,6 +438,7 @@ export default function StudentDashboard() {
         (query) => query.in("profile_id", studentIds),
         (query) => query.eq("student_email", profile.email || user.email),
       ]);
+      const { data: testRows, error: certificateTestError } = await supabase.rpc("get_my_certificate_tests");
       const serviceAttendanceRows = courseIds.length
         ? await fetchRowsWithServiceRole("attendance", { student_id: `in.(${studentIds.join(",")})` })
         : emptyData;
@@ -452,6 +457,7 @@ export default function StudentDashboard() {
       setTasks(taskRows);
       setSubmissions(submissionRows);
       setCertificates(certificateRows);
+      setCertificateTests(certificateTestError || !Array.isArray(testRows) ? [] : testRows);
       setAttendanceRecords(attendanceRows);
       setLoading(false);
     };
@@ -583,6 +589,9 @@ export default function StudentDashboard() {
         return { certificate, course };
       });
   }, [certificates, courses]);
+  const selectedCertificateTest = useMemo(() => certificateTests.find((test) =>
+    String(test.course_id) === String(selectedCourse?.id || selectedCourse?.course_id || "")
+  ) || null, [certificateTests, selectedCourse]);
   const selectedCourseVideoRecord = useMemo(() => {
     const selectedCourseKey = String(selectedCourse?.id || selectedCourse?.course_id || "");
     const now = Date.now();
@@ -812,6 +821,29 @@ export default function StudentDashboard() {
     setWorkSource("");
     setWorkNotes("");
     setSubmitSuccess(previousSubmission?.id ? "Revision submitted successfully." : "Work submitted successfully.");
+  };
+
+  const submitCertificateTest = async (test) => {
+    const answers = certificateTestAnswers[test.id] || {};
+    if (test.questions.some((question) => answers[question.id] === undefined)) {
+      setCertificateTestMessage("Answer every question before submitting the test.");
+      return;
+    }
+    setCertificateTestMessage("");
+    setSubmittingCertificateTestId(test.id);
+    const { data, error: testError } = await supabase.rpc("submit_certificate_test", {
+      p_test_id: test.id,
+      p_answers: answers,
+    });
+    setSubmittingCertificateTestId("");
+    if (testError) {
+      setCertificateTestMessage(testError.message || "Unable to submit the certificate test.");
+      return;
+    }
+    setCertificateTestMessage(data?.passed
+      ? `You passed with ${data.score}%. Your trainer can now issue the certificate.`
+      : `Your score is ${data?.score ?? 0}%. You need more than 75%. ${data?.attempts_remaining ? `Your next attempt is available tomorrow (${data.attempts_remaining} remaining).` : "All three attempts have been used."}`);
+    setDashboardRefreshKey((current) => current + 1);
   };
 
   const renderCourse = (course) => {
@@ -1227,7 +1259,20 @@ export default function StudentDashboard() {
           ) : (
             <div id="course-progress" className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
               <h2 className="text-xl font-semibold text-cert-ink">Certificate progress</h2>
-              <p className="mt-2 text-sm text-slate-500">Your certificate is issued automatically once your trainer approves every assignment and project for the course.</p>
+              <p className="mt-2 text-sm text-slate-500">After your course work is approved, you must pass the final certificate test with more than 75% before your trainer can issue the certificate.</p>
+              {selectedCertificateTest ? (() => {
+                const nextAttemptAt = selectedCertificateTest.next_attempt_at ? new Date(selectedCertificateTest.next_attempt_at) : null;
+                const attemptIsScheduled = nextAttemptAt && nextAttemptAt.getTime() > Date.now();
+                const attemptsUsed = Number(selectedCertificateTest.attempt_count || 0);
+                const answers = certificateTestAnswers[selectedCertificateTest.id] || {};
+                return <section className="mt-6 rounded-2xl border border-cert-line bg-cert-mint/60 p-5">
+                  <p className="text-xs font-bold uppercase tracking-[0.16em] text-cert-green-dark">Final certificate test</p>
+                  <h3 className="mt-2 text-lg font-semibold text-cert-ink">{selectedCertificateTest.title}</h3>
+                  <p className="mt-2 text-sm text-slate-600">Pass mark: more than {selectedCertificateTest.passing_score}% · Attempts used: {attemptsUsed}/3</p>
+                  {selectedCertificateTest.passed ? <p className="mt-4 rounded-xl bg-emerald-100 px-3 py-2 text-sm font-semibold text-emerald-800">Passed{selectedCertificateTest.latest_score !== null ? ` with ${selectedCertificateTest.latest_score}%` : ""}. Your trainer can issue the certificate.</p> : attemptsUsed >= 3 ? <p className="mt-4 rounded-xl bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700">All three attempts have been used. Contact your trainer for guidance.</p> : attemptIsScheduled ? <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">Your next attempt is rescheduled for {nextAttemptAt.toLocaleString()}.</p> : <div className="mt-5 space-y-5">{selectedCertificateTest.questions.map((question, questionIndex) => <fieldset key={question.id} className="rounded-xl border border-cert-line bg-white p-4"><legend className="px-1 text-sm font-semibold text-cert-ink">{questionIndex + 1}. {question.question}</legend><div className="mt-3 grid gap-2">{question.options.map((option, optionIndex) => <label key={`${question.id}-${optionIndex}`} className="flex cursor-pointer items-center gap-3 rounded-lg border border-cert-line px-3 py-2 text-sm text-slate-700"><input type="radio" name={`${selectedCertificateTest.id}-${question.id}`} checked={String(answers[question.id]) === String(optionIndex)} onChange={() => setCertificateTestAnswers({ ...certificateTestAnswers, [selectedCertificateTest.id]: { ...answers, [question.id]: String(optionIndex) } })} />{option}</label>)}</div></fieldset>)}<button type="button" onClick={() => submitCertificateTest(selectedCertificateTest)} disabled={submittingCertificateTestId === selectedCertificateTest.id} className="rounded-xl bg-cert-green px-5 py-3 text-sm font-semibold text-cert-ink disabled:bg-slate-300">{submittingCertificateTestId === selectedCertificateTest.id ? "Submitting test..." : "Submit certificate test"}</button></div>}
+                  {certificateTestMessage && <p className="mt-4 rounded-xl bg-white px-3 py-2 text-sm text-cert-ink ring-1 ring-cert-line">{certificateTestMessage}</p>}
+                </section>;
+              })() : <p className="mt-5 rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">Your trainer will create the final certificate test for this course.</p>}
               <div className="mt-6 h-3 overflow-hidden rounded-full bg-slate-100">
                 <div className="h-full rounded-full bg-cert-green" style={{ width: `${courseStats.progress}%` }} />
               </div>

@@ -24,6 +24,12 @@ const formatAssignedDate = (date) => {
 const currentDate = new Date().toISOString().slice(0, 10);
 const taskEndDate = (task) => task?.end_date || task?.due_date || "";
 const taskIsInactive = (task) => Boolean(taskEndDate(task) && taskEndDate(task) < currentDate) || task?.status === "inactive";
+const emptyCertificateTestQuestions = () => Array.from({ length: 5 }, (_, index) => ({
+  id: `q${index + 1}`,
+  question: "",
+  options: ["", "", "", ""],
+  correctOption: 0,
+}));
 const formatVideoAvailability = (date) => {
   if (!date) return "Available 24 hours after posting";
   const parsed = new Date(date);
@@ -212,6 +218,8 @@ export default function TrainerDashboard() {
   const [projects, setProjects] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [certificates, setCertificates] = useState([]);
+  const [certificateTests, setCertificateTests] = useState([]);
+  const [certificateTestAttempts, setCertificateTestAttempts] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [courseVideos, setCourseVideos] = useState([]);
   const [attendance, setAttendance] = useState([]);
@@ -222,6 +230,7 @@ export default function TrainerDashboard() {
   const [videoForm, setVideoForm] = useState({ courseId: "", title: "", lessonDate: new Date().toISOString().slice(0, 10), videoUrl: "" });
   const [attendanceForm, setAttendanceForm] = useState({ courseId: "", attendanceDate: currentDate });
   const [attendanceMarks, setAttendanceMarks] = useState({});
+  const [certificateTestForm, setCertificateTestForm] = useState({ courseId: "", title: "Course certificate test", questions: emptyCertificateTestQuestions() });
   const [reviewNotes, setReviewNotes] = useState({});
   const [activeWorkspace, setActiveWorkspace] = useState("overview");
   const [issuingCertificateKey, setIssuingCertificateKey] = useState("");
@@ -285,6 +294,14 @@ export default function TrainerDashboard() {
         : await fetchRows("certificates", (query) => query.in("course_id", courseIds)))
       : [];
     const certificateRows = allCertificates.filter((certificate) => courseIds.some((courseId) => String(courseId) === String(certificate.course_id)));
+    const allCertificateTests = courseIds.length
+      ? (hasServiceRoleKey ? await fetchRowsWithServiceRole("course_certificate_tests") : await fetchRows("course_certificate_tests", (query) => query.in("course_id", courseIds)))
+      : [];
+    const certificateTestRows = allCertificateTests.filter((test) => courseIds.some((courseId) => String(courseId) === String(test.course_id)));
+    const allCertificateTestAttempts = courseIds.length
+      ? (hasServiceRoleKey ? await fetchRowsWithServiceRole("certificate_test_attempts") : await fetchRows("certificate_test_attempts", (query) => query.in("course_id", courseIds)))
+      : [];
+    const certificateTestAttemptRows = allCertificateTestAttempts.filter((attempt) => courseIds.some((courseId) => String(courseId) === String(attempt.course_id)));
     const allNotifications = hasServiceRoleKey
       ? await fetchRowsWithServiceRole("trainer_notifications")
       : await fetchRows("trainer_notifications", (query) => query.eq("trainer_id", profile.id).order("created_at", { ascending: false }));
@@ -313,6 +330,8 @@ export default function TrainerDashboard() {
     setProjects(projectRows);
     setSubmissions(submissionRows);
     setCertificates(certificateRows);
+    setCertificateTests(certificateTestRows);
+    setCertificateTestAttempts(certificateTestAttemptRows);
     setNotifications(notificationRows);
     setCourseVideos(videoRows);
     setAttendance(attendanceRows);
@@ -368,8 +387,17 @@ export default function TrainerDashboard() {
     const unapprovedAssignments = courseAssignments.filter((assignment) => !submissions.some((submission) => String(submission.assignment_id) === String(assignment.id) && String(submission.student_id) === String(studentId) && submission.status === "approved"));
     const unapprovedProjects = studentProjects.filter((project) => project.status !== "approved");
     const pendingCount = unapprovedAssignments.length + unapprovedProjects.length;
-    return { enrollment, studentId, courseId, pendingAssignments: unapprovedAssignments.length, pendingProjects: unapprovedProjects.length, ready: courseAssignments.length + studentProjects.length > 0 && pendingCount === 0 };
-  }), [enrollments, assignments, projects, submissions]);
+    const test = certificateTests.find((item) => String(item.course_id) === String(courseId));
+    const passedAttempt = test && certificateTestAttempts.find((attempt) => String(attempt.test_id) === String(test.id) && String(attempt.student_id) === String(studentId) && attempt.passed);
+    return {
+      enrollment, studentId, courseId,
+      pendingAssignments: unapprovedAssignments.length,
+      pendingProjects: unapprovedProjects.length,
+      ready: courseAssignments.length + studentProjects.length > 0 && pendingCount === 0,
+      testConfigured: Boolean(test),
+      testPassed: Boolean(passedAttempt),
+    };
+  }), [enrollments, assignments, projects, submissions, certificateTests, certificateTestAttempts]);
 
   const enrolledStudentIds = (courseId) => [...new Set(
     enrollments
@@ -682,6 +710,40 @@ export default function TrainerDashboard() {
     }
   };
 
+  const saveCertificateTest = async (event) => {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    const { courseId, title, questions } = certificateTestForm;
+    if (!courseId || !title.trim() || questions.some((question) => !question.question.trim() || question.options.some((option) => !option.trim()))) {
+      setError("Select a course and complete all five questions with four answer options each.");
+      return;
+    }
+
+    const payload = {
+      course_id: courseId,
+      trainer_id: profile.id,
+      title: title.trim(),
+      questions: questions.map((question) => ({
+        id: question.id,
+        question: question.question.trim(),
+        options: question.options.map((option) => option.trim()),
+        correct_option: String(question.correctOption),
+      })),
+      passing_score: 75,
+      updated_at: new Date().toISOString(),
+    };
+    const { error: testError } = await supabase
+      .from("course_certificate_tests")
+      .upsert(payload, { onConflict: "course_id" });
+    if (testError) {
+      setError(testError.message || "Unable to save the certificate test.");
+      return;
+    }
+    setMessage("Certificate test saved. Students must score above 75% within three attempts before a certificate can be issued.");
+    await loadDashboard();
+  };
+
   const issueCertificate = async (studentId, courseId) => {
     setError("");
     setMessage("");
@@ -696,6 +758,14 @@ export default function TrainerDashboard() {
     if (!approval?.ready) {
       const remaining = `${approval?.pendingAssignments || 0} assignment${approval?.pendingAssignments === 1 ? "" : "s"} and ${approval?.pendingProjects || 0} project${approval?.pendingProjects === 1 ? "" : "s"}`;
       setError(`Certificate cannot be issued yet. ${remaining} still need trainer approval.`);
+      return;
+    }
+    if (!approval.testConfigured) {
+      setError("Create the course certificate test before issuing a certificate.");
+      return;
+    }
+    if (!approval.testPassed) {
+      setError("The student must pass the certificate test with a score above 75% before a certificate can be issued.");
       return;
     }
     issuingCertificateKeysRef.current.add(certificateKey);
@@ -803,6 +873,7 @@ export default function TrainerDashboard() {
             <button type="button" onClick={() => openWorkspace("assign-project")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "assign-project" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Assign project</button>
             <button type="button" onClick={() => openWorkspace("add-videos")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "add-videos" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Video size={16} /> Add videos</button>
             <button type="button" onClick={() => openWorkspace("attendance")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "attendance" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><ClipboardCheck size={16} /> Attendance</button>
+            <button type="button" onClick={() => openWorkspace("certificate-test")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "certificate-test" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><ClipboardCheck size={16} /> Certificate test</button>
             <button type="button" onClick={() => openWorkspace("certificate-approvals")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "certificate-approvals" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Award size={16} /> Certificates</button>
             <button type="button" onClick={() => openWorkspace("change-password")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "change-password" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><KeyRound size={16} /> Change password</button>
             <button type="button" onClick={() => { openWorkspace("project-reviews"); markNotificationsRead("project_submission"); }} className={`relative inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${projectReviewAlertCount > 0 ? "border-rose-300 bg-rose-50 text-rose-700 shadow-sm shadow-rose-100 hover:bg-rose-100" : activeWorkspace === "project-reviews" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Bell size={16} className={projectReviewAlertCount > 0 ? "text-rose-600" : ""} /> Project reviews{projectReviewAlertCount > 0 && <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[0.65rem] font-bold text-white">{projectReviewAlertCount}</span>}</button>
@@ -959,6 +1030,16 @@ export default function TrainerDashboard() {
             </div>
             {!attendanceForm.courseId ? <div className="mt-6 rounded-2xl border border-dashed border-cert-line bg-cert-mint/60 px-5 py-10 text-center text-sm text-slate-500">Select a course to view its enrolled students.</div> : attendanceStudents.length === 0 ? <div className="mt-6 rounded-2xl border border-dashed border-cert-line bg-cert-mint/60 px-5 py-10 text-center text-sm text-slate-500">No students are enrolled in this course.</div> : <div className="mt-6 overflow-hidden rounded-2xl border border-cert-line"><div className="grid grid-cols-[minmax(0,1fr)_9rem] gap-3 bg-cert-mint px-4 py-3 text-xs font-bold uppercase tracking-[0.14em] text-cert-green-dark"><span>Student</span><span>Attendance</span></div>{attendanceStudents.map((student) => <div key={student.id} className="grid grid-cols-[minmax(0,1fr)_9rem] items-center gap-3 border-t border-cert-line px-4 py-3"><div><p className="font-semibold text-cert-ink">{titleFor(student, "Student")}</p><p className="mt-1 text-xs text-slate-500">{student.email || ""}</p></div><select value={attendanceMarks[student.id] || ""} onChange={(event) => setAttendanceMarks({ ...attendanceMarks, [student.id]: event.target.value })} className="rounded-xl border border-cert-line bg-white px-3 py-2 text-sm font-semibold text-cert-ink outline-none focus:border-cert-green"><option value="">Mark status</option><option value="present">Present</option><option value="absent">Absent</option></select></div>)}</div>}
             <div className="mt-6 flex flex-wrap items-center gap-3"><button type="submit" disabled={!attendanceStudents.length} className="inline-flex items-center justify-center gap-2 rounded-xl bg-[linear-gradient(135deg,#0d8f55_0%,#31c96f_100%)] px-5 py-3.5 font-semibold text-cert-ink shadow-[0_16px_28px_-18px_rgba(13,143,85,0.7)] transition hover:brightness-105 disabled:cursor-not-allowed disabled:bg-slate-300">Save attendance</button><button type="button" onClick={downloadAttendanceSheet} disabled={!courseAttendanceSheet.length} className="rounded-xl border border-cert-line bg-white px-5 py-3.5 text-sm font-semibold text-cert-ink transition hover:border-cert-green hover:bg-cert-mint disabled:cursor-not-allowed disabled:text-slate-400">Download all dates (.xlsx)</button>{courseAttendanceSheet.length > 0 && <span className="text-sm text-cert-green-dark">{courseAttendanceSheet.length} saved record{courseAttendanceSheet.length === 1 ? "" : "s"} ready to export.</span>}</div>
+          </form>
+        </section>}
+
+        {activeWorkspace === "certificate-test" && <section className="overflow-hidden rounded-[1.9rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
+          <header className="bg-[linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_140%)] px-6 py-7 text-white"><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-yellow">Certificate requirement</p><h2 className="mt-2 text-2xl font-semibold">Create the final course test</h2><p className="mt-2 text-sm leading-6 text-emerald-50/85">Students need more than 75% to pass. They receive a maximum of three attempts, with one day between failed attempts.</p></header>
+          <form onSubmit={saveCertificateTest} className="space-y-5 p-5 sm:p-6">
+            <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-cert-ink">Course<select value={certificateTestForm.courseId} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, courseId: event.target.value })} className="mt-2 w-full rounded-xl border border-cert-line bg-cert-mint px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select></label><label className="text-sm font-semibold text-cert-ink">Test title<input value={certificateTestForm.title} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, title: event.target.value })} className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label></div>
+            <div className="space-y-4">{certificateTestForm.questions.map((question, questionIndex) => <fieldset key={question.id} className="rounded-2xl border border-cert-line bg-cert-mint/50 p-4"><legend className="px-1 text-sm font-bold text-cert-green-dark">Question {questionIndex + 1}</legend><input value={question.question} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, questions: certificateTestForm.questions.map((item, index) => index === questionIndex ? { ...item, question: event.target.value } : item) })} placeholder="Enter a course-related question" className="mt-2 w-full rounded-xl border border-cert-line bg-white px-3 py-2.5 text-sm outline-none focus:border-cert-green" required /><div className="mt-3 grid gap-2 sm:grid-cols-2">{question.options.map((option, optionIndex) => <label key={`${question.id}-${optionIndex}`} className="flex items-center gap-2 rounded-xl border border-cert-line bg-white px-3 py-2 text-sm"><input type="radio" name={`${question.id}-answer`} checked={question.correctOption === optionIndex} onChange={() => setCertificateTestForm({ ...certificateTestForm, questions: certificateTestForm.questions.map((item, index) => index === questionIndex ? { ...item, correctOption: optionIndex } : item) })} /><input value={option} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, questions: certificateTestForm.questions.map((item, index) => index === questionIndex ? { ...item, options: item.options.map((value, currentIndex) => currentIndex === optionIndex ? event.target.value : value) } : item) })} placeholder={`Option ${optionIndex + 1}`} className="min-w-0 flex-1 outline-none" required /></label>)}</div><p className="mt-2 text-xs text-slate-500">Select the radio button beside the correct answer.</p></fieldset>)}</div>
+            {(error || message) && <p className={`rounded-xl px-4 py-3 text-sm ${error ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>{error || message}</p>}
+            <button type="submit" className="rounded-xl bg-cert-green px-5 py-3 font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">Save certificate test</button>
           </form>
         </section>}
 
