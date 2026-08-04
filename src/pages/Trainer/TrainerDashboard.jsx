@@ -487,7 +487,6 @@ export default function TrainerDashboard() {
         workType: "assignment",
         assignedDate: assignmentForm.assignedDate,
         endDate: assignmentForm.endDate,
-        appUrl: window.location.origin,
       },
     });
 
@@ -547,7 +546,6 @@ export default function TrainerDashboard() {
         workType: "project",
         assignedDate: projectForm.assignedDate,
         endDate: projectForm.endDate,
-        appUrl: window.location.origin,
       },
     });
 

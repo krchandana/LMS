@@ -23,32 +23,6 @@ const formatDate = (value: string) => {
     : new Intl.DateTimeFormat("en", { day: "numeric", month: "long", year: "numeric" }).format(date);
 };
 
-const submissionPageUrl = ({ appUrl, workType, courseId, workTitle, assignedDate, endDate }: {
-  appUrl: string;
-  workType: string;
-  courseId: string;
-  workTitle: string;
-  assignedDate: string;
-  endDate: string;
-}) => {
-  if (!appUrl) return "";
-
-  try {
-    const baseUrl = new URL(appUrl);
-    if (baseUrl.protocol !== "https:" && baseUrl.protocol !== "http:") return "";
-
-    const url = new URL("/student", baseUrl.origin);
-    url.searchParams.set("workType", workType);
-    url.searchParams.set("courseId", courseId);
-    url.searchParams.set("workTitle", workTitle);
-    url.searchParams.set("assignedDate", assignedDate);
-    url.searchParams.set("endDate", endDate);
-    return url.toString();
-  } catch {
-    return "";
-  }
-};
-
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return Response.json({ error: "Method not allowed" }, { status: 405, headers: corsHeaders });
@@ -61,10 +35,6 @@ serve(async (req) => {
     const workLabel = workType === "project" ? "Project" : "Assignment";
     const assignedDate = text(body.assignedDate);
     const endDate = text(body.endDate);
-    // Existing deployed trainer pages may not yet send `appUrl`. The request
-    // origin is the live LMS address in that case, while SITE_URL remains a
-    // useful fallback for server-side callers.
-    const appUrl = text(body.appUrl) || text(Deno.env.get("SITE_URL")) || text(req.headers.get("Origin"));
     const token = text(req.headers.get("Authorization")).replace(/^Bearer\s+/i, "");
     const supabaseUrl = text(Deno.env.get("SUPABASE_URL"));
     const serviceRoleKey = text(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
@@ -121,8 +91,6 @@ serve(async (req) => {
     const safeCourseName = escapeHtml(courseName);
     const safeTitle = escapeHtml(workTitle);
     const safeEndDate = escapeHtml(formatDate(endDate));
-    const workSubmissionUrl = submissionPageUrl({ appUrl, workType, courseId, workTitle, assignedDate, endDate });
-    const safeSubmissionUrl = escapeHtml(workSubmissionUrl);
 
     const results = await Promise.allSettled((students || []).map(async (student) => {
       const email = text(student.email);
@@ -141,12 +109,12 @@ serve(async (req) => {
           `Course: ${courseName}`,
           `${workLabel}: ${workTitle}`,
           "",
-          workSubmissionUrl ? `Submit your ${workType}: ${workSubmissionUrl}` : "Please sign in to Certisured LMS and submit it before the deadline.",
+          "Please sign in to Certisured LMS and submit it before the deadline.",
           "",
           "Regards,",
           "Certisured LMS",
         ].join("\n"),
-        html: `<main style="font-family:Arial,sans-serif;color:#071a2f;max-width:640px;margin:auto;border:1px solid #d8e7dc;border-radius:16px;overflow:hidden"><header style="background:#e9f8ef;padding:28px;text-align:center"><p style="margin:0;color:#049c54;font-weight:bold;letter-spacing:2px">CERTISURED LMS</p><h1 style="margin:12px 0 0;font-size:24px">New ${workLabel}</h1></header><section style="padding:28px"><p>Hello ${escapeHtml(studentName)},</p><p>Your trainer has assigned a new <strong>${safeCourseName}</strong> ${workType}, due on<br><strong>${safeEndDate}</strong>.</p><p><strong>Course:</strong> ${safeCourseName}<br><strong>${workLabel}:</strong> ${safeTitle}</p>${workSubmissionUrl ? `<p style="margin:28px 0"><a href="${safeSubmissionUrl}" style="display:inline-block;background:#049c54;color:#ffffff;padding:13px 20px;border-radius:8px;text-decoration:none;font-weight:bold">Submit ${workLabel}</a></p><p style="font-size:13px;color:#526375">The link opens this ${workType} in Certisured LMS. Sign in with your student account if prompted.</p>` : "<p>Please sign in to Certisured LMS and submit it before the deadline.</p>"}<p>Regards,<br>Certisured LMS</p></section></main>`,
+        html: `<main style="font-family:Arial,sans-serif;color:#071a2f;max-width:640px;margin:auto;border:1px solid #d8e7dc;border-radius:16px;overflow:hidden"><header style="background:#e9f8ef;padding:28px;text-align:center"><p style="margin:0;color:#049c54;font-weight:bold;letter-spacing:2px">CERTISURED LMS</p><h1 style="margin:12px 0 0;font-size:24px">New ${workLabel}</h1></header><section style="padding:28px"><p>Hello ${escapeHtml(studentName)},</p><p>Your trainer has assigned a new <strong>${safeCourseName}</strong> ${workType}, due on<br><strong>${safeEndDate}</strong>.</p><p><strong>Course:</strong> ${safeCourseName}<br><strong>${workLabel}:</strong> ${safeTitle}</p><p>Please sign in to Certisured LMS and submit it before the deadline.</p><p>Regards,<br>Certisured LMS</p></section></main>`,
       });
       return "sent";
     }));
