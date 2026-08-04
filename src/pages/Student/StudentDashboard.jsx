@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Award, Bell, CheckCircle2, Download, FolderGit2, HardDriveUpload, LogOut, Play, ShieldCheck, Sparkles, Target, Video, X } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -246,6 +246,7 @@ const insertWithColumnFallback = async (table, payload) => {
 export default function StudentDashboard() {
   const { profile, user } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [loading, setLoading] = useState(true);
   const [studentRecord, setStudentRecord] = useState(null);
   const [courses, setCourses] = useState([]);
@@ -272,6 +273,7 @@ export default function StudentDashboard() {
   const fileInputRef = useRef(null);
   const driveFolderInputRef = useRef(null);
   const githubFolderInputRef = useRef(null);
+  const openedSubmissionLinkRef = useRef("");
   const studentName = profile?.full_name || profile?.name || user?.user_metadata?.full_name || "Student";
 
   useEffect(() => {
@@ -596,6 +598,14 @@ export default function StudentDashboard() {
   const selectedCourseEmbed = videoEmbedUrl(selectedCourseVideo);
 
   const openSubmitForm = (task) => {
+    if (task.status === "submitted") {
+      setSubmitError("This work has already been submitted and is waiting for review.");
+      return;
+    }
+    if (task.status === "approved") {
+      setSubmitError("This work has already been approved.");
+      return;
+    }
     if (task.status === "inactive" || taskIsPastEndDate(task)) {
       setSubmitError(`This ${task.task_type || "task"} became inactive after ${taskEndDate(task)}.`);
       return;
@@ -608,6 +618,37 @@ export default function StudentDashboard() {
     setSubmitSuccess("");
     setShowWorkSourcePicker(false);
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const workType = params.get("workType");
+    const courseId = params.get("courseId");
+    const workTitle = params.get("workTitle");
+    const assignedDate = params.get("assignedDate");
+    const endDate = params.get("endDate");
+    if (!workType || !courseId || !workTitle || !assignedDate || !endDate) return;
+    const linkKey = location.search;
+    if (openedSubmissionLinkRef.current === linkKey) return;
+
+    const task = taskSummaries.find((item) =>
+      item.task_type === workType
+      && String(item.course_id || item.course || "") === courseId
+      && titleFor(item, "") === workTitle
+      && String(item.assigned_date || "").slice(0, 10) === assignedDate
+      && String(taskEndDate(item) || "").slice(0, 10) === endDate
+    );
+    if (!task) return;
+
+    openedSubmissionLinkRef.current = linkKey;
+    const openTimer = window.setTimeout(() => {
+      setActiveTaskView(workType);
+      setActivePanel(workType === "project" ? "projects" : "assignments");
+      setTaskCourseFilter(courseId);
+      openSubmitForm(task);
+      document.getElementById("student-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+    return () => window.clearTimeout(openTimer);
+  }, [location.search, taskSummaries]);
 
   const selectWorkFiles = (files, source) => {
     const selectedFiles = Array.from(files || []);

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Eye, EyeOff, GraduationCap, ShieldCheck, UsersRound } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { supabase } from "../lib/supabaseClient";
 import CertisuredBrand, { CertisuredMark } from "../components/CertisuredBrand";
 
@@ -296,7 +296,10 @@ const repairApprovedStudentProfile = async ({ profile, studentId, authEmail, use
 };
 
 const LoginPage = () => {
-  const [role, setRole] = useState("admin");
+  const location = useLocation();
+  const requestedStudentPath = new URLSearchParams(location.search).get("returnTo") || "";
+  const safeStudentPath = requestedStudentPath.startsWith("/student") ? requestedStudentPath : "/student";
+  const [role, setRole] = useState(() => new URLSearchParams(location.search).get("role") === "student" ? "student" : "admin");
   const [showPassword, setShowPassword] = useState(false);
   const [studentName, setStudentName] = useState("");
   const [credential, setCredential] = useState("");
@@ -447,7 +450,7 @@ const LoginPage = () => {
           return;
         }
 
-        navigate("/student", { replace: true });
+        navigate(safeStudentPath, { replace: true });
         return;
       }
 
