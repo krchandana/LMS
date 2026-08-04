@@ -616,7 +616,7 @@ export default function StudentDashboard() {
     setWorkNotes("");
     setSubmitError("");
     setSubmitSuccess("");
-    setShowWorkSourcePicker(false);
+    setShowWorkSourcePicker(true);
   };
 
   useEffect(() => {
