@@ -1220,7 +1220,7 @@ export default function StudentDashboard() {
         </section>
 
         <div className={activePanel === "certificate" ? "space-y-5" : "hidden"}>
-          {issuedCertificates.length ? (
+          {issuedCertificates.length > 0 && (
             <div className="grid gap-6">
               {issuedCertificates.map(({ certificate, course }) => (
                 <article key={certificate.id || `${certificate.student_id}-${certificate.course_id}`} className="relative overflow-hidden rounded-[2rem] border border-cert-green/60 bg-[radial-gradient(circle_at_12%_8%,rgba(49,201,111,0.28),transparent_24%),radial-gradient(circle_at_92%_90%,rgba(7,26,47,0.12),transparent_28%),linear-gradient(135deg,#ffffff_0%,#edf9f1_55%,#dff4e7_100%)] p-3 shadow-[0_28px_70px_-38px_rgba(7,26,47,0.48)]">
@@ -1256,9 +1256,9 @@ export default function StudentDashboard() {
                 </article>
               ))}
             </div>
-          ) : (
+          )}
             <div id="course-progress" className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
-              <h2 className="text-xl font-semibold text-cert-ink">Certificate progress</h2>
+              <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Course certificate</p><h2 className="mt-1 text-xl font-semibold text-cert-ink">Certificate progress</h2></div><label className="grid gap-1 text-xs font-semibold text-slate-500"><span>Choose course</span><select value={selectedCourse?.id || selectedCourse?.course_id || ""} onChange={(event) => setSelectedCourseId(event.target.value)} className="rounded-xl border border-cert-line bg-white px-3 py-2 text-sm font-semibold text-cert-ink outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15">{courses.map((course) => <option key={course.id || course.course_id} value={String(course.id || course.course_id)}>{titleFor(course, "Course")}</option>)}</select></label></div>
               <p className="mt-2 text-sm text-slate-500">After your course work is approved, you must pass the final certificate test with more than 75% before your trainer can issue the certificate.</p>
               {selectedCertificateTest ? (() => {
                 const nextAttemptAt = selectedCertificateTest.next_attempt_at ? new Date(selectedCertificateTest.next_attempt_at) : null;
@@ -1279,7 +1279,6 @@ export default function StudentDashboard() {
               <p className="mt-4 text-sm text-slate-500">{courseStats.approved} of {courseStats.totalTasks} required tasks approved for {titleFor(selectedCourse, "this course")}.</p>
               <div className="mt-5 rounded-2xl bg-cert-mint px-4 py-3 text-sm text-slate-600"><p className="font-semibold text-cert-ink">Almost there</p><p className="mt-1">After the remaining work is approved, the certificate will appear here to download.</p></div>
             </div>
-          )}
         </div>
       </section>
       </div>
