@@ -85,7 +85,9 @@ serve(async (req) => {
       method: "POST",
       headers: { "Authorization": `Bearer ${openAiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: Deno.env.get("OPENAI_TEST_GENERATION_MODEL") || "gpt-5.6-sol",
+        // This model supports Responses API structured output and is available to most API accounts.
+        // It can be overridden per project with OPENAI_TEST_GENERATION_MODEL.
+        model: Deno.env.get("OPENAI_TEST_GENERATION_MODEL") || "gpt-4o-mini",
         store: false,
         input: [
           { role: "system", content: "You create fair final-course multiple-choice assessments. Use only the supplied course material. Produce three different sets of five practical questions. Never repeat a question, answer, or distractor across sets. Each question needs one unambiguously correct answer and three plausible distractors. Do not include answers or explanations in question text." },

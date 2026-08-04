@@ -5,6 +5,14 @@ import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
 
 const titleFor = (item, fallback = "Untitled") => item?.title || item?.name || item?.full_name || item?.email || fallback;
+const edgeFunctionErrorMessage = async (error, fallback) => {
+  const response = error?.context;
+  if (response && typeof response.clone === "function") {
+    const body = await response.clone().json().catch(() => null);
+    if (body?.error) return body.error;
+  }
+  return error?.message || fallback;
+};
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || "";
 const serviceRoleKey = import.meta.env.VITE_SUPABASE_SERVICE_ROLE_KEY || "";
 const hasServiceRoleKey = Boolean(supabaseUrl && serviceRoleKey);
@@ -783,7 +791,7 @@ export default function TrainerDashboard() {
         body: { courseId },
       });
       if (generationError || generatedTest?.error) {
-        setError(generatedTest?.error || generationError?.message || "Unable to generate the certificate test.");
+        setError(generatedTest?.error || await edgeFunctionErrorMessage(generationError, "Unable to generate the certificate test."));
         return;
       }
       setMessage("A three-attempt certificate test was generated for the student. They must score above 75% before the certificate can be issued.");
