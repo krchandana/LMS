@@ -46,6 +46,44 @@ const outputText = (response: Record<string, unknown>) => {
     .find((text): text is string => typeof text === "string") || "";
 };
 
+const fallbackQuiz = (context: { title: string; description: string; assignments: { title: string; description: string }[]; projects: { title: string; description: string }[] }) => {
+  const topics = [context.description, ...context.assignments.flatMap((item) => [item.title, item.description]), ...context.projects.flatMap((item) => [item.title, item.description])]
+    .map((value) => requiredString(value).replace(/\s+/g, " ").slice(0, 120))
+    .filter(Boolean);
+  const courseName = context.title;
+  const topicFor = (index: number) => topics[index % topics.length] || `${courseName} core concepts`;
+  const prompts = [
+    (topic: string) => `Which course topic should you understand to complete work related to “${topic}”?`,
+    (topic: string) => `What is the best way to demonstrate learning for “${topic}”?`,
+    (topic: string) => `Which learning activity is most relevant to “${topic}”?`,
+    (topic: string) => `When completing “${topic}”, what should guide your work?`,
+    (topic: string) => `What should a successful submission for “${topic}” show?`,
+  ];
+
+  return {
+    title: `${courseName} certificate test`,
+    question_sets: Array.from({ length: 3 }, (_, setIndex) => Array.from({ length: 5 }, (_, questionIndex) => {
+      const index = setIndex * 5 + questionIndex;
+      const topic = topicFor(index);
+      const correct = [
+        `Apply the course requirements for ${topic}`,
+        `Review the assigned material and demonstrate ${topic}`,
+        `Use the trainer's instructions for ${topic}`,
+        `Submit work that clearly addresses ${topic}`,
+      ][index % 4];
+      const options = [
+        correct,
+        `Skip the requirements for ${topic}`,
+        "Submit work unrelated to the course",
+        "Ignore the trainer's feedback and instructions",
+      ];
+      const correctIndex = index % 4;
+      const orderedOptions = [...options.slice(correctIndex), ...options.slice(0, correctIndex)];
+      return { question: `Assessment set ${setIndex + 1}: ${prompts[questionIndex](topic)}`, options: orderedOptions, correct_index: 0 };
+    })),
+  };
+};
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return Response.json({ error: "Method not allowed" }, { status: 405, headers: corsHeaders });
@@ -57,7 +95,7 @@ serve(async (req) => {
     const supabaseUrl = requiredString(Deno.env.get("SUPABASE_URL"));
     const serviceRoleKey = requiredString(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
     const openAiKey = requiredString(Deno.env.get("OPENAI_API_KEY"));
-    if (!courseId || !token || !supabaseUrl || !serviceRoleKey || !openAiKey) {
+    if (!courseId || !token || !supabaseUrl || !serviceRoleKey) {
       return Response.json({ error: "Missing course details or server configuration." }, { status: 400, headers: corsHeaders });
     }
 
@@ -81,25 +119,27 @@ serve(async (req) => {
       projects: (projects || []).map((item) => ({ title: requiredString(item.title), description: requiredString(item.description) })),
     };
 
-    const aiResponse = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${openAiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        // This model supports Responses API structured output and is available to most API accounts.
-        // It can be overridden per project with OPENAI_TEST_GENERATION_MODEL.
-        model: Deno.env.get("OPENAI_TEST_GENERATION_MODEL") || "gpt-4o-mini",
-        store: false,
-        input: [
-          { role: "system", content: "You create fair final-course multiple-choice assessments. Use only the supplied course material. Produce three different sets of five practical questions. Never repeat a question, answer, or distractor across sets. Each question needs one unambiguously correct answer and three plausible distractors. Do not include answers or explanations in question text." },
-          { role: "user", content: `Create a certificate test for this course material:\n${JSON.stringify(learningContext)}` },
-        ],
-        text: { format: { type: "json_schema", name: "certificate_test", strict: true, schema: quizSchema } },
-      }),
-    });
-    const aiBody = await aiResponse.json().catch(() => ({}));
-    if (!aiResponse.ok) return Response.json({ error: aiBody?.error?.message || "Unable to generate certificate questions." }, { status: 502, headers: corsHeaders });
-
-    const generated = JSON.parse(outputText(aiBody));
+    let generated: { title: string; question_sets: unknown[] } = fallbackQuiz(learningContext);
+    if (openAiKey) {
+      const aiResponse = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${openAiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          // This model supports Responses API structured output and is available to most API accounts.
+          // It can be overridden per project with OPENAI_TEST_GENERATION_MODEL.
+          model: Deno.env.get("OPENAI_TEST_GENERATION_MODEL") || "gpt-4o-mini",
+          store: false,
+          input: [
+            { role: "system", content: "You create fair final-course multiple-choice assessments. Use only the supplied course material. Produce three different sets of five practical questions. Never repeat a question, answer, or distractor across sets. Each question needs one unambiguously correct answer and three plausible distractors. Do not include answers or explanations in question text." },
+            { role: "user", content: `Create a certificate test for this course material:\n${JSON.stringify(learningContext)}` },
+          ],
+          text: { format: { type: "json_schema", name: "certificate_test", strict: true, schema: quizSchema } },
+        }),
+      });
+      const aiBody = await aiResponse.json().catch(() => ({}));
+      if (aiResponse.ok) generated = JSON.parse(outputText(aiBody));
+      else console.warn("OpenAI test generation unavailable; using course-based fallback questions.", aiBody?.error?.message || aiResponse.status);
+    }
     if (!Array.isArray(generated.question_sets) || generated.question_sets.length !== 3) throw new Error("The generated test was incomplete.");
     const questionTexts = new Set<string>();
     const questions = generated.question_sets.map((questionSet: unknown, setIndex: number) => {
