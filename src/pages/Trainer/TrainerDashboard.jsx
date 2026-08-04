@@ -399,13 +399,17 @@ export default function TrainerDashboard() {
     const pendingCount = unapprovedAssignments.length + unapprovedProjects.length;
     const test = certificateTests.find((item) => String(item.course_id) === String(courseId));
     const passedAttempt = test && certificateTestAttempts.find((attempt) => String(attempt.test_id) === String(test.id) && String(attempt.student_id) === String(studentId) && attempt.passed);
+    const workReady = courseAssignments.length + studentProjects.length > 0 && pendingCount === 0;
+    const testConfigured = Boolean(test);
+    const testPassed = Boolean(passedAttempt);
     return {
       enrollment, studentId, courseId,
       pendingAssignments: unapprovedAssignments.length,
       pendingProjects: unapprovedProjects.length,
-      ready: courseAssignments.length + studentProjects.length > 0 && pendingCount === 0,
-      testConfigured: Boolean(test),
-      testPassed: Boolean(passedAttempt),
+      workReady,
+      testConfigured,
+      testPassed,
+      issueReady: workReady && testPassed,
     };
   }), [enrollments, assignments, projects, submissions, certificates, certificateTests, certificateTestAttempts]);
   const certificateApprovalGroups = useMemo(() => {
@@ -781,7 +785,7 @@ export default function TrainerDashboard() {
       return;
     }
     const approval = certificateApprovals.find((item) => String(item.studentId) === String(studentId) && String(item.courseId) === String(courseId));
-    if (!approval?.ready) {
+    if (!approval?.workReady) {
       const remaining = `${approval?.pendingAssignments || 0} assignment${approval?.pendingAssignments === 1 ? "" : "s"} and ${approval?.pendingProjects || 0} project${approval?.pendingProjects === 1 ? "" : "s"}`;
       setError(`Certificate cannot be issued yet. ${remaining} still need trainer approval.`);
       return;
@@ -1080,13 +1084,13 @@ export default function TrainerDashboard() {
           <header className="flex flex-wrap items-center justify-between gap-4 border-b border-cert-line bg-[linear-gradient(135deg,#f4fff8_0%,#e9f8ef_100%)] px-6 py-6"><div><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Certificate approvals</p><h2 className="mt-2 text-2xl font-semibold text-cert-ink">Issue student certificates</h2><p className="mt-1 text-sm text-slate-500">Approve and send a certificate for each enrolled student and course.</p></div><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-cert-green-dark ring-1 ring-cert-line"><Award size={23} /></span></header>
           <div className="space-y-6 bg-[linear-gradient(180deg,#fbfefd_0%,#f5faf7_100%)] p-5 sm:p-6">
             {certificateApprovalGroups.length === 0 ? <p className="rounded-2xl bg-cert-mint p-5 text-sm text-slate-500">No students are waiting for a certificate.</p> : certificateApprovalGroups.map(({ courseId, course, approvals }) => {
-              const readyCount = approvals.filter((approval) => approval.ready).length;
+              const readyCount = approvals.filter((approval) => approval.issueReady).length;
               return <section key={courseId} className="overflow-hidden rounded-[1.6rem] border border-cert-line bg-white shadow-[0_14px_34px_-28px_rgba(7,26,47,0.2)]">
                 <header className="flex flex-wrap items-center justify-between gap-3 border-b border-cert-line bg-[linear-gradient(135deg,#edf9f1_0%,#f9fffb_100%)] px-5 py-4">
                   <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Course certificate queue</p><h3 className="mt-1 truncate text-lg font-semibold text-cert-ink">{titleFor(course, "Course")}</h3></div>
                   <div className="flex items-center gap-2"><span className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-cert-ink ring-1 ring-cert-line">{approvals.length} student{approvals.length === 1 ? "" : "s"}</span>{readyCount > 0 && <span className="rounded-full bg-sky-100 px-3 py-1.5 text-xs font-bold text-sky-700">{readyCount} ready</span>}</div>
                 </header>
-                <div className="grid gap-4 p-4 sm:grid-cols-2 xl:grid-cols-3">{approvals.map((approval) => { const { enrollment, studentId, courseId: approvalCourseId, pendingAssignments, pendingProjects, ready } = approval; const student = studentById.get(String(studentId)); const isIssuing = issuingCertificateKey === `${studentId}-${approvalCourseId}`; return <article key={enrollment.id || `${studentId}-${approvalCourseId}`} className="rounded-2xl border border-cert-line bg-cert-mint/60 p-5 transition hover:-translate-y-0.5 hover:border-cert-green/50 hover:shadow-[0_14px_30px_-24px_rgba(7,26,47,0.28)]"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate font-semibold text-cert-ink">{titleFor(student, "Student")}</p><p className="mt-1 truncate text-xs text-slate-500">{student?.email || "Enrolled student"}</p></div><span className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${ready ? "bg-sky-500" : "bg-amber-400"}`} aria-label={ready ? "Ready to issue" : "Work pending"} /></div>{!ready && <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">Waiting for {pendingAssignments} assignment{pendingAssignments === 1 ? "" : "s"} and {pendingProjects} project{pendingProjects === 1 ? "" : "s"} to be approved.</p>}<div className="mt-5 flex items-center justify-between gap-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${ready ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-800"}`}>{ready ? "Ready to issue" : "Work pending"}</span><button type="button" disabled={!ready || isIssuing} onClick={() => issueCertificate(studentId, approvalCourseId)} className="rounded-xl bg-cert-green px-3 py-2 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{isIssuing ? "Issuing..." : "Issue certificate"}</button></div></article>; })}</div>
+                <div className="grid gap-4 p-4 sm:grid-cols-2 xl:grid-cols-3">{approvals.map((approval) => { const { enrollment, studentId, courseId: approvalCourseId, pendingAssignments, pendingProjects, workReady, testConfigured, testPassed, issueReady } = approval; const student = studentById.get(String(studentId)); const isIssuing = issuingCertificateKey === `${studentId}-${approvalCourseId}`; const status = !workReady ? "Work pending" : !testConfigured ? "Test needs setup" : !testPassed ? "Test in progress" : "Ready to issue"; const statusClass = !workReady ? "bg-amber-100 text-amber-800" : issueReady ? "bg-sky-100 text-sky-700" : "bg-violet-100 text-violet-700"; return <article key={enrollment.id || `${studentId}-${approvalCourseId}`} className="rounded-2xl border border-cert-line bg-cert-mint/60 p-5 transition hover:-translate-y-0.5 hover:border-cert-green/50 hover:shadow-[0_14px_30px_-24px_rgba(7,26,47,0.28)]"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate font-semibold text-cert-ink">{titleFor(student, "Student")}</p><p className="mt-1 truncate text-xs text-slate-500">{student?.email || "Enrolled student"}</p></div><span className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${issueReady ? "bg-sky-500" : workReady ? "bg-violet-500" : "bg-amber-400"}`} aria-label={status} /></div>{!workReady && <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">Waiting for {pendingAssignments} assignment{pendingAssignments === 1 ? "" : "s"} and {pendingProjects} project{pendingProjects === 1 ? "" : "s"} to be approved.</p>}{workReady && testConfigured && !testPassed && <p className="mt-4 rounded-xl bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-800">Final test created. The student must score above 75% before a certificate can be issued.</p>}<div className="mt-5 flex items-center justify-between gap-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${statusClass}`}>{status}</span>{!testConfigured && workReady ? <button type="button" disabled={isIssuing} onClick={() => issueCertificate(studentId, approvalCourseId)} className="rounded-xl bg-cert-green px-3 py-2 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">Generate test</button> : <button type="button" disabled={!issueReady || isIssuing} onClick={() => issueCertificate(studentId, approvalCourseId)} className="rounded-xl bg-cert-green px-3 py-2 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{isIssuing ? "Issuing..." : "Issue certificate"}</button>}</div></article>; })}</div>
               </section>;
             })}
           </div>
