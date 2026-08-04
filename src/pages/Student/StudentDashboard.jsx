@@ -502,6 +502,14 @@ export default function StudentDashboard() {
     () => taskSummaries.filter((task) => task.task_type === "project"),
     [taskSummaries]
   );
+  const assignmentSubmissionAlertCount = useMemo(
+    () => assignmentTasks.filter((task) => !["submitted", "approved"].includes(task.status)).length,
+    [assignmentTasks]
+  );
+  const projectSubmissionAlertCount = useMemo(
+    () => projectTasks.filter((task) => !["submitted", "approved"].includes(task.status)).length,
+    [projectTasks]
+  );
   const baseTasks = activePanel === "task-status"
     ? taskSummaries
     : activeTaskView === "project" ? projectTasks : assignmentTasks;
@@ -942,8 +950,8 @@ export default function StudentDashboard() {
       <div className="w-full">
       <nav className="sticky top-0 z-30 flex gap-2 overflow-x-auto border-b border-cert-line bg-white/95 px-4 py-3 shadow-sm backdrop-blur lg:hidden" aria-label="Student workspace navigation">
         <button type="button" onClick={() => openPanel("courses")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "courses" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Courses</button>
-        <button type="button" onClick={() => openTaskPage("assignment")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "assignments" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Assignments</button>
-        <button type="button" onClick={() => openTaskPage("project")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "projects" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Projects</button>
+        <button type="button" onClick={() => openTaskPage("assignment")} className={`inline-flex items-center gap-2 shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${assignmentSubmissionAlertCount ? "bg-rose-600 text-white shadow-lg shadow-rose-600/20" : activePanel === "assignments" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Assignments{assignmentSubmissionAlertCount > 0 && <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-xs">{assignmentSubmissionAlertCount}</span>}</button>
+        <button type="button" onClick={() => openTaskPage("project")} className={`inline-flex items-center gap-2 shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${projectSubmissionAlertCount ? "bg-rose-600 text-white shadow-lg shadow-rose-600/20" : activePanel === "projects" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Projects{projectSubmissionAlertCount > 0 && <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-xs">{projectSubmissionAlertCount}</span>}</button>
         <button type="button" onClick={() => openPanel("attendance")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "attendance" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Attendance</button>
         {[['Pending', 'pending'], ['Submitted', 'submitted'], ['Approved', 'approved'], ['Rejected', 'rejected']].map(([label, status]) => (
           <button key={status} type="button" onClick={() => openPanel("task-status", { status })} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "task-status" && taskStatusFilter === status ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>{label}</button>
@@ -964,11 +972,11 @@ export default function StudentDashboard() {
           <button type="button" onClick={() => openPanel("courses")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "courses" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
             <span>Courses</span>
           </button>
-          <button type="button" onClick={() => openTaskPage("assignment")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "assignments" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
-            <span>Assignments</span>
+          <button type="button" onClick={() => openTaskPage("assignment")} className={`inline-flex items-center justify-between gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${assignmentSubmissionAlertCount ? "bg-rose-500 text-white shadow-lg shadow-rose-950/25" : activePanel === "assignments" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
+            <span>Assignments</span>{assignmentSubmissionAlertCount > 0 && <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs font-bold">{assignmentSubmissionAlertCount}</span>}
           </button>
-          <button type="button" onClick={() => openTaskPage("project")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "projects" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
-            <span>Projects</span>
+          <button type="button" onClick={() => openTaskPage("project")} className={`inline-flex items-center justify-between gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${projectSubmissionAlertCount ? "bg-rose-500 text-white shadow-lg shadow-rose-950/25" : activePanel === "projects" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
+            <span>Projects</span>{projectSubmissionAlertCount > 0 && <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs font-bold">{projectSubmissionAlertCount}</span>}
           </button>
           <button type="button" onClick={() => openPanel("attendance")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "attendance" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
             <span>Attendance</span>
