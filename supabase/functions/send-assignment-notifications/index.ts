@@ -61,7 +61,10 @@ serve(async (req) => {
     const workLabel = workType === "project" ? "Project" : "Assignment";
     const assignedDate = text(body.assignedDate);
     const endDate = text(body.endDate);
-    const appUrl = text(body.appUrl) || text(Deno.env.get("SITE_URL"));
+    // Existing deployed trainer pages may not yet send `appUrl`. The request
+    // origin is the live LMS address in that case, while SITE_URL remains a
+    // useful fallback for server-side callers.
+    const appUrl = text(body.appUrl) || text(Deno.env.get("SITE_URL")) || text(req.headers.get("Origin"));
     const token = text(req.headers.get("Authorization")).replace(/^Bearer\s+/i, "");
     const supabaseUrl = text(Deno.env.get("SUPABASE_URL"));
     const serviceRoleKey = text(Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
