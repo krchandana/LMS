@@ -379,7 +379,9 @@ export default function TrainerDashboard() {
 
     return [...groups.values()].sort((first, second) => String(second.assignedAt || "").localeCompare(String(first.assignedAt || "")));
   }, [projects]);
-  const certificateApprovals = useMemo(() => enrollments.map((enrollment) => {
+  const certificateApprovals = useMemo(() => enrollments.filter((enrollment) => !certificates.some((certificate) =>
+    String(certificate.student_id) === String(enrollment.student_id) && String(certificate.course_id) === String(enrollment.course_id)
+  )).map((enrollment) => {
     const studentId = enrollment.student_id;
     const courseId = enrollment.course_id;
     const courseAssignments = assignments.filter((assignment) => String(assignment.course_id) === String(courseId) && (!assignment.student_id || String(assignment.student_id) === String(studentId)));
@@ -397,7 +399,7 @@ export default function TrainerDashboard() {
       testConfigured: Boolean(test),
       testPassed: Boolean(passedAttempt),
     };
-  }), [enrollments, assignments, projects, submissions, certificateTests, certificateTestAttempts]);
+  }), [enrollments, assignments, projects, submissions, certificates, certificateTests, certificateTestAttempts]);
 
   const enrolledStudentIds = (courseId) => [...new Set(
     enrollments
