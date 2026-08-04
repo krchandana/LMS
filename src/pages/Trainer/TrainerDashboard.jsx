@@ -761,7 +761,15 @@ export default function TrainerDashboard() {
       return;
     }
     if (!approval.testConfigured) {
-      setError("Create the course certificate test before issuing a certificate.");
+      const { data: generatedTest, error: generationError } = await supabase.functions.invoke("generate-certificate-test", {
+        body: { courseId },
+      });
+      if (generationError || generatedTest?.error) {
+        setError(generatedTest?.error || generationError?.message || "Unable to generate the certificate test.");
+        return;
+      }
+      setMessage("A three-attempt certificate test was generated for the student. They must score above 75% before the certificate can be issued.");
+      await loadDashboard();
       return;
     }
     if (!approval.testPassed) {
@@ -873,7 +881,6 @@ export default function TrainerDashboard() {
             <button type="button" onClick={() => openWorkspace("assign-project")} className={`rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "assign-project" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}>Assign project</button>
             <button type="button" onClick={() => openWorkspace("add-videos")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "add-videos" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Video size={16} /> Add videos</button>
             <button type="button" onClick={() => openWorkspace("attendance")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "attendance" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><ClipboardCheck size={16} /> Attendance</button>
-            <button type="button" onClick={() => openWorkspace("certificate-test")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "certificate-test" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><ClipboardCheck size={16} /> Certificate test</button>
             <button type="button" onClick={() => openWorkspace("certificate-approvals")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "certificate-approvals" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Award size={16} /> Certificates</button>
             <button type="button" onClick={() => openWorkspace("change-password")} className={`inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${activeWorkspace === "change-password" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><KeyRound size={16} /> Change password</button>
             <button type="button" onClick={() => { openWorkspace("project-reviews"); markNotificationsRead("project_submission"); }} className={`relative inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${projectReviewAlertCount > 0 ? "border-rose-300 bg-rose-50 text-rose-700 shadow-sm shadow-rose-100 hover:bg-rose-100" : activeWorkspace === "project-reviews" ? "border-cert-green bg-cert-green text-cert-ink" : "border-cert-line text-cert-ink hover:border-cert-green hover:bg-cert-mint"}`}><Bell size={16} className={projectReviewAlertCount > 0 ? "text-rose-600" : ""} /> Project reviews{projectReviewAlertCount > 0 && <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-500 px-1 text-[0.65rem] font-bold text-white">{projectReviewAlertCount}</span>}</button>
