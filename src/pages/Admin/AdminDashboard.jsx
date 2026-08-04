@@ -1740,6 +1740,11 @@ export default function AdminDashboard() {
 
   const removeCourse = async (course) => {
     if (!course?.id) return;
+    const enrolledStudentCount = courseEnrollmentById.get(String(course.id)) || 0;
+    if (enrolledStudentCount > 0) {
+      setError(`Cannot remove this course while ${enrolledStudentCount} student${enrolledStudentCount === 1 ? " is" : "s are"} enrolled. Remove or reassign the students first in Mapping.`);
+      return;
+    }
     if (!window.confirm(`Remove course \"${firstValue(course.title, course.name, course.course_name, "selected course")}\"?`)) return;
 
     setSaving(true);
@@ -2356,10 +2361,10 @@ export default function AdminDashboard() {
                         {durationComplete && isActive && <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">Course duration has ended. Admin approval is required to set this course inactive.</p>}
                         <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-cert-line pt-4">
                           <p className="inline-flex items-center gap-2 text-sm font-medium text-slate-600"><UsersRound size={17} className="text-cert-green-dark" aria-hidden="true" /> {courseEnrollmentById.get(String(course.id)) || 0} students enrolled</p>
-                          <button type="button" disabled={saving} onClick={() => setCourseStatusByAdmin(course, isActive ? "inactive" : "active")} className={`rounded-xl px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60 ${isActive ? "bg-slate-900 text-white hover:bg-cert-ink" : "bg-cert-green text-cert-ink hover:bg-cert-green-dark hover:text-white"}`}>
+                          <div className="flex flex-wrap gap-2"><button type="button" disabled={saving} onClick={() => setCourseStatusByAdmin(course, isActive ? "inactive" : "active")} className={`rounded-xl px-3 py-2 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-60 ${isActive ? "bg-slate-900 text-white hover:bg-cert-ink" : "bg-cert-green text-cert-ink hover:bg-cert-green-dark hover:text-white"}`}>
                             {isActive ? (durationComplete ? "Approve & set inactive" : "Set inactive") : "Reactivate"}
-                          </button>
-                        </div>
+                          </button><button type="button" disabled={saving || (courseEnrollmentById.get(String(course.id)) || 0) > 0} onClick={() => removeCourse(course)} title={(courseEnrollmentById.get(String(course.id)) || 0) > 0 ? "Remove or reassign enrolled students before removing this course." : "Permanently remove course"} className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"><X size={16} aria-hidden="true" /> Remove course</button></div>
+                        </div>{(courseEnrollmentById.get(String(course.id)) || 0) > 0 && <p className="mt-3 text-xs font-medium text-amber-700">Remove or reassign enrolled students before removing this course.</p>}
                       </div>
                     </div>
                   </article>
