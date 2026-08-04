@@ -1220,39 +1220,16 @@ export default function StudentDashboard() {
         </section>
 
         <div className={activePanel === "certificate" ? "space-y-5" : "hidden"}>
+          <header className="relative overflow-hidden rounded-[2rem] bg-[radial-gradient(circle_at_88%_8%,rgba(231,232,91,0.28),transparent_26%),linear-gradient(135deg,#062239_0%,#08415a_60%,#0c8a58_150%)] px-6 py-7 text-white shadow-[0_24px_60px_-35px_rgba(7,26,47,0.5)]">
+            <div className="absolute -bottom-12 right-8 h-32 w-32 rounded-full border border-white/10" />
+            <div className="relative flex flex-wrap items-center justify-between gap-5"><div><p className="text-xs font-bold uppercase tracking-[0.24em] text-cert-yellow">Your achievements</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">Certificates & final tests</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-emerald-50/85">Keep your issued certificates in one place and complete any remaining course assessments.</p></div><span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-cert-yellow backdrop-blur"><Award size={27} aria-hidden="true" /></span></div>
+          </header>
           {issuedCertificates.length > 0 && (
             <div className="grid gap-6">
               {issuedCertificates.map(({ certificate, course }) => (
-                <article key={certificate.id || `${certificate.student_id}-${certificate.course_id}`} className="relative overflow-hidden rounded-[2rem] border border-cert-green/60 bg-[radial-gradient(circle_at_12%_8%,rgba(49,201,111,0.28),transparent_24%),radial-gradient(circle_at_92%_90%,rgba(7,26,47,0.12),transparent_28%),linear-gradient(135deg,#ffffff_0%,#edf9f1_55%,#dff4e7_100%)] p-3 shadow-[0_28px_70px_-38px_rgba(7,26,47,0.48)]">
-                  <div className="pointer-events-none absolute -right-16 -top-20 h-64 w-64 rounded-full border-[28px] border-cert-green/10" />
-                  <div className="pointer-events-none absolute -bottom-20 -left-16 h-52 w-52 rounded-full border-[22px] border-cert-ink/5" />
-                  <div className="relative rounded-[1.45rem] border-[3px] border-cert-ink bg-white/70 px-6 py-8 text-center sm:px-12 sm:py-10">
-                    <div className="flex flex-col items-center gap-3 rounded-2xl bg-cert-ink px-5 py-4 shadow-lg shadow-cert-ink/20 sm:flex-row sm:justify-between sm:text-left">
-                      <div className="inline-flex items-center gap-3">
-                        <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cert-green text-cert-ink shadow-lg shadow-black/20"><Award size={22} aria-hidden="true" /></span>
-                        <span><span className="block text-lg font-extrabold tracking-tight text-white">CERTISURED</span><span className="block text-[0.6rem] font-bold tracking-[0.16em] text-white/65">LEARNING MANAGEMENT SYSTEM</span></span>
-                      </div>
-                      <span className="rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-[0.65rem] font-bold uppercase tracking-[0.16em] text-cert-green">Verified completion</span>
-                    </div>
-
-                    <p className="mt-8 text-xs font-bold uppercase tracking-[0.3em] text-cert-green-dark">Certificate of completion</p>
-                    <h2 className="mt-3 font-serif text-4xl font-semibold text-cert-ink sm:text-5xl">Achievement Award</h2>
-                    <div className="mx-auto mt-5 h-1 w-20 rounded-full bg-cert-green shadow-[0_0_18px_rgba(49,201,111,0.7)]" />
-                    <p className="mt-7 text-sm text-slate-500">This certificate is proudly presented to</p>
-                    <p className="mt-2 font-serif text-4xl font-bold text-cert-ink sm:text-5xl">{profile.full_name || "Student"}</p>
-                    <p className="mx-auto mt-6 max-w-2xl text-sm leading-7 text-slate-600">for successfully completing all approved assignments and projects for</p>
-                    <p className="mt-1 text-xl font-bold text-cert-green-dark sm:text-2xl">{titleFor(course, "this course")}</p>
-
-                    <div className="mx-auto mt-7 grid max-w-2xl gap-3 text-left sm:grid-cols-2">
-                      <div className="rounded-2xl border border-cert-green/35 bg-cert-mint/70 px-4 py-3"><p className="text-[0.62rem] font-bold uppercase tracking-[0.16em] text-cert-green-dark">Course duration</p><p className="mt-1 font-semibold text-cert-ink">{course?.duration || "Not specified"}</p></div>
-                      <div className="rounded-2xl border border-cert-ink/15 bg-cert-ink/[0.04] px-4 py-3"><p className="text-[0.62rem] font-bold uppercase tracking-[0.16em] text-cert-ink/60">Issued by</p><p className="mt-1 font-semibold text-cert-ink">{course?.trainer_name || "Certisured Training Team"}</p></div>
-                    </div>
-
-                    <div className="mt-8 flex flex-col gap-5 border-t border-cert-line pt-5 text-left sm:flex-row sm:items-end sm:justify-between">
-                      <div className="grid grid-cols-2 gap-x-8 gap-y-3 text-xs text-slate-500"><div><p>Certificate no.</p><p className="mt-1 font-semibold text-cert-ink">{certificate.certificate_number || `CERT-${String(certificate.id || "COMPLETE").slice(-8).toUpperCase()}`}</p></div><div><p>Issue date</p><p className="mt-1 font-semibold text-cert-ink">{formatCertificateDate(certificate.issue_date || certificate.created_at)}</p></div></div>
-                      <button type="button" onClick={() => downloadCertificate(certificate, course)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-cert-green px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white"><Download size={16} aria-hidden="true" /> Download certificate</button>
-                    </div>
-                  </div>
+                <article key={certificate.id || `${certificate.student_id}-${certificate.course_id}`} className="overflow-hidden rounded-[1.75rem] border border-cert-line bg-white shadow-[0_22px_52px_-36px_rgba(7,26,47,0.35)]">
+                  <div className="flex flex-wrap items-center justify-between gap-4 bg-[linear-gradient(135deg,#062239_0%,#0a4d50_70%,#0c8a58_150%)] px-5 py-4 text-white"><div className="inline-flex items-center gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-cert-green text-cert-ink shadow-lg shadow-black/20"><Award size={22} aria-hidden="true" /></span><span><span className="block text-lg font-extrabold tracking-tight">CERTISURED</span><span className="block text-[0.6rem] font-bold tracking-[0.16em] text-white/65">CERTIFICATE OF COMPLETION</span></span></div><span className="rounded-full border border-emerald-200/25 bg-emerald-300/10 px-3 py-1.5 text-[0.65rem] font-bold uppercase tracking-[0.14em] text-cert-green">Verified</span></div>
+                  <div className="grid gap-6 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Achievement awarded to</p><h2 className="mt-2 font-serif text-3xl font-bold text-cert-ink sm:text-4xl">{profile.full_name || "Student"}</h2><p className="mt-4 text-sm text-slate-500">Successfully completed</p><p className="mt-1 text-xl font-bold text-cert-green-dark">{titleFor(course, "this course")}</p><div className="mt-5 grid gap-3 sm:grid-cols-3"><div className="rounded-xl bg-cert-mint px-3 py-3"><p className="text-[0.6rem] font-bold uppercase tracking-[0.14em] text-cert-green-dark">Duration</p><p className="mt-1 text-sm font-semibold text-cert-ink">{course?.duration || "Not specified"}</p></div><div className="rounded-xl bg-slate-50 px-3 py-3"><p className="text-[0.6rem] font-bold uppercase tracking-[0.14em] text-slate-500">Issued by</p><p className="mt-1 text-sm font-semibold text-cert-ink">{course?.trainer_name || "Certisured Team"}</p></div><div className="rounded-xl bg-slate-50 px-3 py-3"><p className="text-[0.6rem] font-bold uppercase tracking-[0.14em] text-slate-500">Issued</p><p className="mt-1 text-sm font-semibold text-cert-ink">{formatCertificateDate(certificate.issue_date || certificate.created_at)}</p></div></div></div><div className="flex flex-col gap-3 lg:min-w-48"><p className="text-xs font-semibold text-slate-500">No. {certificate.certificate_number || `CERT-${String(certificate.id || "COMPLETE").slice(-8).toUpperCase()}`}</p><button type="button" onClick={() => downloadCertificate(certificate, course)} className="inline-flex items-center justify-center gap-2 rounded-xl bg-cert-green px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white"><Download size={16} aria-hidden="true" /> Download certificate</button></div></div>
                 </article>
               ))}
             </div>
