@@ -51,6 +51,47 @@ const fallbackQuiz = (context: { title: string; description: string; assignments
     .map((value) => requiredString(value).replace(/\s+/g, " ").slice(0, 64))
     .filter(Boolean);
   const courseName = context.title;
+  const normalizedCourseName = courseName.toLowerCase();
+  const courseTopics = normalizedCourseName.includes("agentic")
+    ? [
+      ["planning", "Break a complex goal into clear, actionable steps.", "Generate random responses without a goal.", "Store only the final answer.", "Avoid deciding what to do next."],
+      ["memory", "Retain relevant context from earlier interactions and tasks.", "Delete all context after each step.", "Replace every answer with the same text.", "Prevent the agent from using prior information."],
+      ["tool use", "Call an appropriate external tool or API to complete a task.", "Guess data that a tool could provide.", "Avoid using any available tool.", "Use a tool without checking its result."],
+      ["natural language processing", "Understand and work with human language in text or speech.", "Only store images without analysing them.", "Turn off all user input.", "Avoid interpreting the user's request."],
+      ["feedback", "Use evaluation results to improve the next action or response.", "Ignore every evaluation result.", "Repeat an error without checking it.", "Stop learning after the first response."],
+    ]
+    : normalizedCourseName.includes("python")
+      ? [
+        ["a Python function", "Reuse a named block of code to perform a task.", "Store only a web page layout.", "Replace every variable with text.", "Run code without a defined task."],
+        ["a Python list", "Store an ordered, changeable collection of values.", "Store only one unchangeable value.", "Prevent values from being accessed.", "Compile a program into machine code."],
+        ["a dictionary", "Map unique keys to related values.", "Store values only by their screen position.", "Create a loop with no condition.", "Prevent data from having labels."],
+        ["a loop", "Repeat a block of code while processing multiple values.", "Run a block only after deleting it.", "Stop a program before it starts.", "Replace all conditions with comments."],
+        ["indentation", "Define the structure and code blocks in Python.", "Change only the font of a program.", "Add a database connection.", "Remove every function parameter."],
+      ]
+      : normalizedCourseName.includes("machine learning")
+        ? [
+          ["training data", "Provide examples from which a model can learn patterns.", "Guarantee a model never receives examples.", "Only store the final prediction.", "Remove all input features."],
+          ["a feature", "Represent an input attribute used by a model for prediction.", "Represent only the final model score.", "Delete a training example.", "Prevent a model from receiving input."],
+          ["a test set", "Evaluate how well a trained model performs on unseen data.", "Train a model repeatedly on the same answer key.", "Replace labels with blank values.", "Remove model evaluation entirely."],
+          ["overfitting", "Learning training examples too closely and generalising poorly.", "Improving performance on unseen data.", "Collecting a balanced dataset.", "Using evaluation data correctly."],
+          ["supervised learning", "Learn from examples that include known target labels.", "Learn without any input data.", "Remove all target values from a task.", "Use only random guesses as labels."],
+        ]
+        : [];
+  if (courseTopics.length === 5) {
+    const stems = [
+      (topic: string) => `What is the primary role of ${topic} in ${courseName}?`,
+      (topic: string) => `In a ${courseName} task, which use of ${topic} is correct?`,
+      (topic: string) => `Which outcome shows effective use of ${topic} in ${courseName}?`,
+    ];
+    return {
+      title: `${courseName} certificate test`,
+      question_sets: stems.map((stem, setIndex) => courseTopics.map(([topic, correct, ...incorrect], questionIndex) => ({
+        question: stem(topic),
+        options: [correct, ...incorrect],
+        correct_index: 0,
+      }))),
+    };
+  }
   const topicFor = (index: number) => topics[index % topics.length] || `${courseName} core concepts`;
   const prompts = [
     (topic: string) => `Which course topic should you understand to complete work related to “${topic}”?`,
@@ -77,9 +118,9 @@ const fallbackQuiz = (context: { title: string; description: string; assignments
         "Submit work unrelated to the course",
         "Ignore the trainer's feedback and instructions",
       ];
-      const correctIndex = index % 4;
-      const orderedOptions = [...options.slice(correctIndex), ...options.slice(0, correctIndex)];
-      return { question: `Assessment set ${setIndex + 1}: ${prompts[questionIndex](topic)}`, options: orderedOptions, correct_index: 0 };
+      // The correct answer is deliberately kept first, matching correct_index 0.
+      // Do not reorder this array without updating correct_index as well.
+      return { question: `Assessment set ${setIndex + 1}: ${prompts[questionIndex](topic)}`, options, correct_index: 0 };
     })),
   };
 };
