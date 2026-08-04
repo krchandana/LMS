@@ -13,6 +13,7 @@ import {
   UserCheck,
   UsersRound,
   Video,
+  X,
 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/useAuth";
@@ -1453,6 +1454,11 @@ export default function AdminDashboard() {
 
   const removeTrainer = async (trainer) => {
     if (!trainer?.id) return;
+    const assignedCourses = trainerAssignmentsById.get(String(trainer.id))?.courses || [];
+    if (assignedCourses.length > 0) {
+      setError(`Cannot remove this trainer while ${assignedCourses.length} course${assignedCourses.length === 1 ? " is" : "s are"} assigned. Reassign the courses first in Mapping.`);
+      return;
+    }
     if (!window.confirm(`Remove trainer \"${firstValue(trainer.full_name, trainer.name, trainer.email, "selected trainer")}?`)) return;
 
     setSaving(true);
@@ -2164,7 +2170,7 @@ export default function AdminDashboard() {
                           <p className="text-sm font-medium text-slate-600">Assigned courses: <span className="font-semibold text-cert-ink">{assignedCourses.length}</span></p>
                           {assignedCourses.length > 0 ? <div className="mt-3 flex flex-wrap gap-2">{assignedCourses.map((course) => <span key={course.id} className="rounded-full bg-cert-green/15 px-3 py-1 text-xs font-semibold text-cert-green-dark">{firstValue(course.title, course.name, course.course_name, "Course")}</span>)}</div> : <p className="mt-2 text-sm text-slate-500">No courses assigned yet.</p>}
                         </div>
-                        <p className="mt-5 inline-flex items-center gap-2 border-t border-cert-line pt-4 text-sm font-medium text-slate-600"><UsersRound size={17} className="text-cert-green-dark" aria-hidden="true" /> {assignedStudentCount} students assigned</p>
+                        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-cert-line pt-4"><p className="inline-flex items-center gap-2 text-sm font-medium text-slate-600"><UsersRound size={17} className="text-cert-green-dark" aria-hidden="true" /> {assignedStudentCount} students assigned</p><div className="flex flex-wrap gap-2"><button type="button" onClick={() => toggleTrainerStatus(trainer)} disabled={saving} className="rounded-xl border border-cert-line bg-white px-3 py-2 text-sm font-semibold text-cert-ink transition hover:border-cert-green hover:bg-cert-mint disabled:cursor-not-allowed disabled:opacity-60">{(trainer.status || "active").toLowerCase() === "active" ? "Deactivate" : "Activate"}</button><button type="button" onClick={() => removeTrainer(trainer)} disabled={saving || assignedCourses.length > 0} title={assignedCourses.length > 0 ? "Reassign this trainer's courses before removal." : "Permanently remove trainer"} className="inline-flex items-center gap-1.5 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"><X size={16} aria-hidden="true" /> Remove trainer</button></div></div>{assignedCourses.length > 0 && <p className="mt-3 text-xs font-medium text-amber-700">Reassign the listed course{assignedCourses.length === 1 ? "" : "s"} before removing this trainer.</p>}
                       </div>
                     </div>
                   </article>
