@@ -400,6 +400,22 @@ export default function TrainerDashboard() {
       testPassed: Boolean(passedAttempt),
     };
   }), [enrollments, assignments, projects, submissions, certificates, certificateTests, certificateTestAttempts]);
+  const certificateApprovalGroups = useMemo(() => {
+    const groups = new Map();
+
+    certificateApprovals.forEach((approval) => {
+      const courseId = String(approval.courseId || "unassigned");
+      groups.set(courseId, [...(groups.get(courseId) || []), approval]);
+    });
+
+    return [...groups.entries()]
+      .map(([courseId, approvals]) => ({
+        courseId,
+        course: courseById.get(courseId),
+        approvals: [...approvals].sort((first, second) => titleFor(studentById.get(String(first.studentId)), "Student").localeCompare(titleFor(studentById.get(String(second.studentId)), "Student"))),
+      }))
+      .sort((first, second) => titleFor(first.course, "Course").localeCompare(titleFor(second.course, "Course")));
+  }, [certificateApprovals, courseById, studentById]);
 
   const enrolledStudentIds = (courseId) => [...new Set(
     enrollments
@@ -1054,7 +1070,18 @@ export default function TrainerDashboard() {
 
         {activeWorkspace === "certificate-approvals" && <section className="overflow-hidden rounded-[1.9rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
           <header className="flex flex-wrap items-center justify-between gap-4 border-b border-cert-line bg-[linear-gradient(135deg,#f4fff8_0%,#e9f8ef_100%)] px-6 py-6"><div><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Certificate approvals</p><h2 className="mt-2 text-2xl font-semibold text-cert-ink">Issue student certificates</h2><p className="mt-1 text-sm text-slate-500">Approve and send a certificate for each enrolled student and course.</p></div><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-cert-green-dark ring-1 ring-cert-line"><Award size={23} /></span></header>
-          <div className="grid gap-4 p-5 sm:grid-cols-2 xl:grid-cols-3">{certificateApprovals.length === 0 ? <p className="rounded-2xl bg-cert-mint p-5 text-sm text-slate-500">No enrolled students found.</p> : certificateApprovals.map((approval) => { const { enrollment, studentId, courseId, pendingAssignments, pendingProjects, ready } = approval; const student = studentById.get(String(studentId)); const course = courseById.get(String(courseId)); const issued = certificates.some((certificate) => String(certificate.student_id) === String(studentId) && String(certificate.course_id) === String(courseId)); const isIssuing = issuingCertificateKey === `${studentId}-${courseId}`; return <article key={enrollment.id || `${studentId}-${courseId}`} className="rounded-2xl border border-cert-line bg-cert-mint/60 p-5"><p className="font-semibold text-cert-ink">{titleFor(student, "Student")}</p><p className="mt-1 text-sm text-slate-600">{titleFor(course, "Course")}</p>{!issued && !ready && <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">Waiting for {pendingAssignments} assignment{pendingAssignments === 1 ? "" : "s"} and {pendingProjects} project{pendingProjects === 1 ? "" : "s"} to be approved.</p>}<div className="mt-5 flex items-center justify-between gap-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${issued ? "bg-emerald-100 text-emerald-700" : ready ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-800"}`}>{issued ? "Issued" : ready ? "Ready to issue" : "Work pending"}</span>{issued ? <Award size={18} className="text-cert-green-dark" /> : <button type="button" disabled={!ready || isIssuing} onClick={() => issueCertificate(studentId, courseId)} className="rounded-xl bg-cert-green px-3 py-2 text-sm font-semibold text-cert-ink disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{isIssuing ? "Issuing..." : "Issue certificate"}</button>}</div></article>; })}</div>
+          <div className="space-y-6 bg-[linear-gradient(180deg,#fbfefd_0%,#f5faf7_100%)] p-5 sm:p-6">
+            {certificateApprovalGroups.length === 0 ? <p className="rounded-2xl bg-cert-mint p-5 text-sm text-slate-500">No students are waiting for a certificate.</p> : certificateApprovalGroups.map(({ courseId, course, approvals }) => {
+              const readyCount = approvals.filter((approval) => approval.ready).length;
+              return <section key={courseId} className="overflow-hidden rounded-[1.6rem] border border-cert-line bg-white shadow-[0_14px_34px_-28px_rgba(7,26,47,0.2)]">
+                <header className="flex flex-wrap items-center justify-between gap-3 border-b border-cert-line bg-[linear-gradient(135deg,#edf9f1_0%,#f9fffb_100%)] px-5 py-4">
+                  <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Course certificate queue</p><h3 className="mt-1 truncate text-lg font-semibold text-cert-ink">{titleFor(course, "Course")}</h3></div>
+                  <div className="flex items-center gap-2"><span className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-cert-ink ring-1 ring-cert-line">{approvals.length} student{approvals.length === 1 ? "" : "s"}</span>{readyCount > 0 && <span className="rounded-full bg-sky-100 px-3 py-1.5 text-xs font-bold text-sky-700">{readyCount} ready</span>}</div>
+                </header>
+                <div className="grid gap-4 p-4 sm:grid-cols-2 xl:grid-cols-3">{approvals.map((approval) => { const { enrollment, studentId, courseId: approvalCourseId, pendingAssignments, pendingProjects, ready } = approval; const student = studentById.get(String(studentId)); const isIssuing = issuingCertificateKey === `${studentId}-${approvalCourseId}`; return <article key={enrollment.id || `${studentId}-${approvalCourseId}`} className="rounded-2xl border border-cert-line bg-cert-mint/60 p-5 transition hover:-translate-y-0.5 hover:border-cert-green/50 hover:shadow-[0_14px_30px_-24px_rgba(7,26,47,0.28)]"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="truncate font-semibold text-cert-ink">{titleFor(student, "Student")}</p><p className="mt-1 truncate text-xs text-slate-500">{student?.email || "Enrolled student"}</p></div><span className={`mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full ${ready ? "bg-sky-500" : "bg-amber-400"}`} aria-label={ready ? "Ready to issue" : "Work pending"} /></div>{!ready && <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">Waiting for {pendingAssignments} assignment{pendingAssignments === 1 ? "" : "s"} and {pendingProjects} project{pendingProjects === 1 ? "" : "s"} to be approved.</p>}<div className="mt-5 flex items-center justify-between gap-3"><span className={`rounded-full px-3 py-1 text-xs font-bold ${ready ? "bg-sky-100 text-sky-700" : "bg-amber-100 text-amber-800"}`}>{ready ? "Ready to issue" : "Work pending"}</span><button type="button" disabled={!ready || isIssuing} onClick={() => issueCertificate(studentId, approvalCourseId)} className="rounded-xl bg-cert-green px-3 py-2 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500">{isIssuing ? "Issuing..." : "Issue certificate"}</button></div></article>; })}</div>
+              </section>;
+            })}
+          </div>
         </section>}
 
         {activeWorkspace === "change-password" && <section className="mx-auto w-full max-w-xl overflow-hidden rounded-[1.9rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
