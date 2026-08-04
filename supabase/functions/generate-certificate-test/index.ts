@@ -47,8 +47,8 @@ const outputText = (response: Record<string, unknown>) => {
 };
 
 const fallbackQuiz = (context: { title: string; description: string; assignments: { title: string; description: string }[]; projects: { title: string; description: string }[] }) => {
-  const topics = [context.description, ...context.assignments.flatMap((item) => [item.title, item.description]), ...context.projects.flatMap((item) => [item.title, item.description])]
-    .map((value) => requiredString(value).replace(/\s+/g, " ").slice(0, 120))
+  const topics = [...context.assignments.map((item) => item.title), ...context.projects.map((item) => item.title), context.title]
+    .map((value) => requiredString(value).replace(/\s+/g, " ").slice(0, 64))
     .filter(Boolean);
   const courseName = context.title;
   const topicFor = (index: number) => topics[index % topics.length] || `${courseName} core concepts`;
