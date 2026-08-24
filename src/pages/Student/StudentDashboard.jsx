@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Award, Bell, CheckCircle2, Download, FolderGit2, HardDriveUpload, LogOut, Play, ShieldCheck, Sparkles, Target, Video, X } from "lucide-react";
+import { Award, Bell, BookOpen, CalendarDays, CheckCircle2, ChevronRight, Clock3, Download, FolderGit2, HardDriveUpload, LayoutGrid, List, LogOut, Megaphone, Menu, Play, Search, ShieldCheck, Sparkles, Target, UserRound, Video, X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
+import QRCode from "qrcode";
 import { useAuth } from "../../context/useAuth";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -18,7 +19,6 @@ const statusStyles = {
 };
 
 const emptyData = [];
-const certificateCompanyName = "CERTISURED LEARNING MANAGEMENT SYSTEM";
 
 const titleFor = (item, fallback = "Untitled") =>
   item?.title || item?.name || item?.course_name || item?.project_name || item?.assignment_name || item?.full_name || fallback;
@@ -36,6 +36,18 @@ const compactCertificateOption = (option) => {
   if (text.startsWith("Skip the requirements for ")) return "Skip the course requirements";
   return text;
 };
+
+const certificateQuestionTypeLabel = (type) => ({
+  multiple_choice: "Multiple choice",
+  true_false: "True / False",
+  short_answer: "Short answer",
+  coding: "Coding question",
+}[type] || "Multiple choice");
+
+function CertificateQuestionInput({ question, questionIndex, testId, answer, onAnswer }) {
+  const isWrittenAnswer = question.type === "short_answer" || question.type === "coding";
+  return <fieldset className="relative overflow-hidden rounded-2xl border border-cert-line bg-white p-4 shadow-[0_12px_24px_-22px_rgba(7,26,47,0.3)]"><span className="absolute inset-y-0 left-0 w-1 bg-cert-green" /><legend className="flex max-w-full items-start gap-3 px-1 text-sm font-semibold leading-6 text-cert-ink"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cert-mint text-xs font-bold text-cert-green-dark">{questionIndex + 1}</span><span className="min-w-0 flex-1 break-words">{compactCertificateQuestion(question.question, questionIndex)}<span className="mt-1 flex flex-wrap gap-2 text-[0.65rem] font-bold uppercase tracking-[0.12em]"><span className="text-cert-green-dark">{certificateQuestionTypeLabel(question.type)}</span>{question.difficulty && <span className="text-slate-400">{question.difficulty}</span>}</span></span></legend>{isWrittenAnswer ? <textarea value={answer || ""} onChange={(event) => onAnswer(event.target.value)} placeholder={question.type === "coding" ? "Write your code or pseudocode here" : "Write your answer here"} className="mt-4 min-h-32 w-full rounded-xl border border-cert-line bg-cert-mint/30 p-3 font-mono text-sm outline-none focus:border-cert-green focus:ring-2 focus:ring-cert-green/15" /> : <div className="mt-4 grid gap-2">{(question.options || []).map((option, optionIndex) => <label key={`${question.id}-${optionIndex}`} className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-3 text-sm leading-5 transition ${String(answer) === String(optionIndex) ? "border-cert-green bg-cert-mint text-cert-ink ring-2 ring-cert-green/15" : "border-cert-line bg-white text-slate-700 hover:border-cert-green/50 hover:bg-cert-mint/50"}`}><input type="radio" name={`${testId}-${question.id}`} checked={String(answer) === String(optionIndex)} onChange={() => onAnswer(String(optionIndex))} className="shrink-0 accent-cert-green" /><span className="min-w-0 break-words">{compactCertificateOption(option)}</span></label>)}</div>}</fieldset>;
+}
 
 // Trainers can enter a brief or a fully structured brief.  Keep the latter
 // readable for students by recognizing the labels used in the task builder.
@@ -260,10 +272,14 @@ export default function StudentDashboard() {
   const [loading, setLoading] = useState(true);
   const [studentRecord, setStudentRecord] = useState(null);
   const [courses, setCourses] = useState([]);
+  const [catalogCourses, setCatalogCourses] = useState([]);
+  const [catalogSearch, setCatalogSearch] = useState("");
   const [courseVideos, setCourseVideos] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [certificates, setCertificates] = useState([]);
+  const [courseReviews, setCourseReviews] = useState([]);
+  const [reviewDrafts, setReviewDrafts] = useState({});
   const [certificateTests, setCertificateTests] = useState([]);
   const [certificateTestAnswers, setCertificateTestAnswers] = useState({});
   const [certificateTestMessage, setCertificateTestMessage] = useState("");
@@ -282,6 +298,7 @@ export default function StudentDashboard() {
   const [taskStatusFilter, setTaskStatusFilter] = useState("");
   const [taskCourseFilter, setTaskCourseFilter] = useState("");
   const [selectedCourseId, setSelectedCourseId] = useState("");
+  const [selectedCatalogCourseId, setSelectedCatalogCourseId] = useState("");
   const [selectedAttendanceCourseId, setSelectedAttendanceCourseId] = useState("");
   const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
   const fileInputRef = useRef(null);
@@ -448,6 +465,7 @@ export default function StudentDashboard() {
         (query) => query.in("profile_id", studentIds),
         (query) => query.eq("student_email", profile.email || user.email),
       ]);
+      const { data: reviewRows } = await supabase.from("course_reviews").select("*").eq("student_id", user.id).order("created_at", { ascending: false });
       const { data: testRows, error: certificateTestError } = await supabase.rpc("get_my_certificate_tests");
       const serviceAttendanceRows = courseIds.length
         ? await fetchRowsWithServiceRole("attendance", { student_id: `in.(${studentIds.join(",")})` })
@@ -467,6 +485,7 @@ export default function StudentDashboard() {
       setTasks(taskRows);
       setSubmissions(submissionRows);
       setCertificates(certificateRows);
+      setCourseReviews(reviewRows || []);
       setCertificateTests(certificateTestError || !Array.isArray(testRows) ? [] : testRows);
       setAttendanceRecords(attendanceRows);
       setLoading(false);
@@ -487,6 +506,28 @@ export default function StudentDashboard() {
 
     return () => { supabase.removeChannel(channel); };
   }, [profile?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return undefined;
+    let active = true;
+
+    const loadCourseCatalog = async () => {
+      const { data, error } = await supabase.rpc("list_active_course_catalog");
+      const rows = error ? await runQuery("courses", (query) => query.order("created_at", { ascending: false })) : (data || []);
+      if (!active) return;
+      setCatalogCourses(rows.filter((course) => (course.status || "active").toLowerCase() === "active"));
+    };
+
+    loadCourseCatalog();
+    const channel = supabase.channel("student-course-catalog")
+      .on("postgres_changes", { event: "*", schema: "public", table: "courses" }, loadCourseCatalog)
+      .subscribe();
+
+    return () => {
+      active = false;
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id]);
 
   const taskSummaries = useMemo(() => {
     const submissionByTask = new Map();
@@ -533,6 +574,15 @@ export default function StudentDashboard() {
     () => new Map(courses.map((course) => [String(course.id || course.course_id), course])),
     [courses]
   );
+  const availableCatalogCourses = useMemo(
+    () => catalogCourses.filter((course) => !courses.some((enrolledCourse) => String(enrolledCourse.id || enrolledCourse.course_id || "") === String(course.id || course.course_id || ""))),
+    [catalogCourses, courses]
+  );
+  const visibleCatalogCourses = useMemo(() => {
+    const query = catalogSearch.trim().toLowerCase();
+    if (!query) return availableCatalogCourses;
+    return availableCatalogCourses.filter((course) => `${titleFor(course, "")} ${course.description || course.course_description || ""} ${course.trainer_name || ""}`.toLowerCase().includes(query));
+  }, [availableCatalogCourses, catalogSearch]);
 
   const taskStats = useMemo(() => {
     const totalTasks = taskSummaries.length;
@@ -690,24 +740,39 @@ export default function StudentDashboard() {
     navigate("/", { replace: true });
   };
 
-  const downloadCertificate = (certificate, course) => {
+  const downloadCertificate = async (certificate, course) => {
     const printWindow = window.open("", "_blank");
     if (!printWindow) return;
 
     const studentName = escapeCertificateText(profile.full_name || "Student");
     const courseName = escapeCertificateText(titleFor(course, "Course"));
-    const courseDuration = escapeCertificateText(course?.duration || "Duration not specified");
+    const storedCourseDuration = String(course?.duration || "").trim();
+    const displayCourseDuration = /^\d+(?:\.\d+)?$/.test(storedCourseDuration)
+      ? `${storedCourseDuration} ${Number(storedCourseDuration) === 1 ? "week" : "weeks"}`
+      : storedCourseDuration || "Duration not specified";
+    const courseDuration = escapeCertificateText(displayCourseDuration);
     const certificateNumber = escapeCertificateText(certificate.certificate_number || `CERT-${String(certificate.id || "COMPLETE").slice(-8).toUpperCase()}`);
     const issueDate = escapeCertificateText(formatCertificateDate(certificate.issue_date || certificate.created_at));
+    const verificationUrl = `${window.location.origin}/verify/${encodeURIComponent(certificateNumber)}`;
+    let qrCodeDataUrl = "";
+    try {
+      qrCodeDataUrl = await QRCode.toDataURL(verificationUrl, { width: 200, margin: 1, color: { dark: "#08253D", light: "#FFFFFF" } });
+    } catch (error) {
+      console.error("Unable to generate certificate QR code:", error);
+    }
+    const certificateLogo = `<svg viewBox="0 0 48 48" fill="none" aria-hidden="true"><rect x="1" y="1" width="46" height="46" rx="12" fill="#31C96F"/><path d="M24 12.4c2.9 2.1 6.3 2.7 9.5 2.3v7.7c0 6.2-3.9 10.6-9.5 12.8-5.6-2.2-9.5-6.6-9.5-12.8v-7.7c3.2.4 6.6-.2 9.5-2.3Z" stroke="#06324F" stroke-width="2.6" stroke-linejoin="round"/><path d="m19.6 23.5 3 3 6.2-6.5" stroke="#06324F" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
     printWindow.document.write(`<!doctype html><html><head><title>Certificate of Completion</title><style>
-      @page { size: landscape; margin: 10mm; }
-      * { box-sizing: border-box; } body { margin: 0; font-family: Arial, sans-serif; color: #071a2f; background: #f1fbf4; }
-      .certificate { min-height: 185mm; border: 12px solid #071a2f; outline: 5px solid #31c96f; outline-offset: -22px; padding: 30mm 26mm; text-align: center; background: linear-gradient(135deg, #ffffff, #f1fbf4); }
-      .brand { display: inline-flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 800; letter-spacing: .06em; }
-      .shield { width: 34px; height: 34px; display: inline-grid; place-items: center; border-radius: 10px; background: #071a2f; color: #31c96f; }
-      .eyebrow { margin: 26px 0 10px; color: #149b55; font-size: 13px; font-weight: 800; letter-spacing: .22em; } h1 { margin: 0; font-family: Georgia, serif; font-size: 48px; } .presented { margin: 28px 0 8px; font-size: 16px; } .name { margin: 0; font-family: Georgia, serif; font-size: 38px; font-weight: 700; } .copy { margin: 22px auto; max-width: 650px; font-size: 18px; line-height: 1.65; } .course { color: #149b55; font-weight: 800; } .footer { display: flex; justify-content: space-between; gap: 24px; margin-top: 35px; padding-top: 18px; border-top: 1px solid #b9ddc8; font-size: 13px; text-align: left; }
-    </style></head><body><main class="certificate"><div class="brand"><span class="shield">✓</span> CERTISURED</div><p style="margin:7px 0 0;font-size:11px;font-weight:700;letter-spacing:.14em;color:#526375">${certificateCompanyName}</p><p class="eyebrow">CERTIFICATE OF COMPLETION</p><h1>Achievement Award</h1><p class="presented">This certificate is proudly presented to</p><p class="name">${studentName}</p><p class="copy">for successfully completing all approved assignments and projects in <span class="course">${courseName}</span>.</p><p style="display:inline-block;margin:0;padding:7px 12px;border-radius:999px;background:#e9f8ef;color:#087b43;font-size:13px;font-weight:700">Course duration: ${courseDuration}</p><div class="footer"><span>Certificate No: ${certificateNumber}</span><span>Issue date: ${issueDate}</span></div></main></body></html>`);
+      @page { size: landscape; margin: 8mm; }
+      * { box-sizing: border-box; } body { margin: 0; background: #edf5f0; color: #08253d; font-family: Arial, sans-serif; }
+      .certificate { position: relative; min-height: 190mm; overflow: hidden; border: 8px solid #08253d; padding: 13mm; background: radial-gradient(circle at 100% 0%, #d7f6df 0, transparent 31%), linear-gradient(135deg, #fff 0%, #f5fcf7 100%); }
+      .certificate::before, .certificate::after { content: ""; position: absolute; border-radius: 50%; pointer-events: none; } .certificate::before { right: -52mm; top: -53mm; width: 105mm; height: 105mm; border: 1px solid #31c96f; box-shadow: 0 0 0 14mm rgba(49,201,111,.08), 0 0 0 29mm rgba(49,201,111,.05); } .certificate::after { left: -24mm; bottom: -26mm; width: 62mm; height: 62mm; background: rgba(49,201,111,.08); }
+      .frame { position: relative; z-index: 1; min-height: 160mm; border: 2px solid #31c96f; padding: 14mm 19mm 11mm; text-align: center; }
+      .brand { display: inline-flex; align-items: center; gap: 11px; } .brand svg { width: 38px; height: 38px; } .brand-name { font-size: 20px; font-weight: 800; letter-spacing: .07em; } .brand-subtitle { margin-top: 3px; color: #587084; font-size: 8px; font-weight: 700; letter-spacing: .16em; }
+      .eyebrow { margin: 17mm 0 10px; color: #078b4c; font-size: 11px; font-weight: 800; letter-spacing: .29em; } h1 { margin: 0; font-family: Georgia, serif; font-size: 42px; line-height: 1.08; } .presented { margin: 17mm 0 8px; color: #426177; font-size: 14px; } .name { margin: 0; font-family: Georgia, serif; font-size: 35px; font-weight: 700; } .name-rule { width: 92mm; height: 2px; margin: 8px auto 16px; background: linear-gradient(90deg, transparent, #31c96f, transparent); }
+      .copy { margin: 0 auto; max-width: 620px; font-size: 17px; line-height: 1.65; } .course { color: #078b4c; font-weight: 800; } .duration { display: inline-block; margin: 15px 0 0; padding: 8px 14px; border: 1px solid #b7e9c7; border-radius: 999px; background: #e9f8ef; color: #087b43; font-size: 12px; font-weight: 700; }
+      .footer { display: flex; justify-content: space-between; gap: 24px; margin-top: 14mm; padding-top: 12px; border-top: 1px solid #b9ddc8; color: #27485f; font-size: 11px; text-align: left; } .footer strong { color: #08253d; } .verification { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 11mm; color: #426177; font-size: 9px; } .verification img { width: 50px; height: 50px; border: 3px solid white; box-shadow: 0 0 0 1px #b9ddc8; } .verification strong { display: block; color: #08253d; font-size: 10px; letter-spacing: .05em; }
+    </style></head><body><main class="certificate"><div class="frame"><div class="brand">${certificateLogo}<div><div class="brand-name">CERTISURED</div><div class="brand-subtitle">LEARNING MANAGEMENT SYSTEM</div></div></div><p class="eyebrow">CERTIFICATE OF COMPLETION</p><h1>Achievement Award</h1><p class="presented">This certificate is proudly presented to</p><p class="name">${studentName}</p><div class="name-rule"></div><p class="copy">for completion of <span class="course">${courseName}</span>.</p><p class="duration">Course duration: ${courseDuration}</p><div class="verification">${qrCodeDataUrl ? `<img src="${qrCodeDataUrl}" alt="Certificate verification QR code"/>` : ""}<span><strong>Scan to verify online</strong>Certificate ID: ${certificateNumber}<br/>Completion date: ${issueDate}</span></div><div class="footer"><span><strong>Certificate ID.</strong> ${certificateNumber}</span><span><strong>Completion date.</strong> ${issueDate}</span></div></div></main></body></html>`);
     printWindow.document.close();
     printWindow.focus();
     window.setTimeout(() => printWindow.print(), 250);
@@ -858,10 +923,39 @@ export default function StudentDashboard() {
       setCertificateTestMessage(testError.message || "Unable to submit the certificate test.");
       return;
     }
+    let certificateEmailError = null;
+    if (data?.passed && data?.certificate_id) {
+      const { error } = await supabase.functions.invoke("send-certificate-email", {
+        body: { certificateId: data.certificate_id },
+      });
+      certificateEmailError = error;
+    }
     setCertificateTestMessage(data?.passed
-      ? `You passed with ${data.score}%. Your trainer can now issue the certificate.`
+      ? certificateEmailError
+        ? `You passed with ${data.score}%. Your certificate has been issued, but the email could not be sent.`
+        : `You passed with ${data.score}%. Your certificate has been issued and emailed to you.`
       : `Your score is ${data?.score ?? 0}%. You need more than 75%. ${data?.attempts_remaining ? `Your next attempt is available tomorrow (${data.attempts_remaining} remaining).` : "All three attempts have been used."}`);
     setDashboardRefreshKey((current) => current + 1);
+  };
+
+  const submitCourseReview = async (event, courseId) => {
+    event.preventDefault();
+    const draft = reviewDrafts[courseId] || {};
+    const rating = Number(draft.rating || 0);
+    if (rating < 1 || rating > 5) return;
+    const { data, error } = await supabase.from("course_reviews").insert({
+      course_id: courseId,
+      student_id: user.id,
+      rating,
+      comment: String(draft.comment || "").trim() || null,
+    }).select().single();
+    if (error) {
+      setCertificateTestMessage(error.message || "Unable to submit your review.");
+      return;
+    }
+    setCourseReviews((current) => [data, ...current]);
+    setReviewDrafts((current) => ({ ...current, [courseId]: {} }));
+    setCertificateTestMessage("Thank you for your course review.");
   };
 
   const renderCourse = (course) => {
@@ -960,6 +1054,7 @@ export default function StudentDashboard() {
       <div className="w-full">
       <nav className="sticky top-0 z-30 flex gap-2 overflow-x-auto border-b border-cert-line bg-white/95 px-4 py-3 shadow-sm backdrop-blur lg:hidden" aria-label="Student workspace navigation">
         <button type="button" onClick={() => openPanel("courses")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "courses" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Courses</button>
+        <button type="button" onClick={() => openPanel("course-catalog")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "course-catalog" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Explore</button>
         <button type="button" onClick={() => openTaskPage("assignment")} className={`inline-flex items-center gap-2 shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${assignmentSubmissionAlertCount ? "bg-rose-600 text-white shadow-lg shadow-rose-600/20" : activePanel === "assignments" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Assignments{assignmentSubmissionAlertCount > 0 && <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-xs">{assignmentSubmissionAlertCount}</span>}</button>
         <button type="button" onClick={() => openTaskPage("project")} className={`inline-flex items-center gap-2 shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${projectSubmissionAlertCount ? "bg-rose-600 text-white shadow-lg shadow-rose-600/20" : activePanel === "projects" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Projects{projectSubmissionAlertCount > 0 && <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-xs">{projectSubmissionAlertCount}</span>}</button>
         <button type="button" onClick={() => openPanel("attendance")} className={`shrink-0 rounded-xl px-3 py-2 text-sm font-semibold transition ${activePanel === "attendance" ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-ink"}`}>Attendance</button>
@@ -981,6 +1076,10 @@ export default function StudentDashboard() {
         <div className="mt-3 flex flex-1 flex-col gap-2">
           <button type="button" onClick={() => openPanel("courses")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "courses" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
             <span>Courses</span>
+          </button>
+          <button type="button" onClick={() => openPanel("course-catalog")} className={`inline-flex items-center gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${activePanel === "course-catalog" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
+            <BookOpen size={16} aria-hidden="true" />
+            <span>Explore courses</span>
           </button>
           <button type="button" onClick={() => openTaskPage("assignment")} className={`inline-flex items-center justify-between gap-2 rounded-xl px-3 py-3 text-sm font-semibold transition ${assignmentSubmissionAlertCount ? "bg-rose-500 text-white shadow-lg shadow-rose-950/25" : activePanel === "assignments" ? "bg-cert-green text-cert-ink shadow-lg shadow-cert-ink/25" : "text-white/85 hover:bg-white/10"}`}>
             <span>Assignments</span>{assignmentSubmissionAlertCount > 0 && <span className="rounded-full bg-white/20 px-2 py-0.5 text-xs font-bold">{assignmentSubmissionAlertCount}</span>}
@@ -1133,6 +1232,42 @@ export default function StudentDashboard() {
           </aside>
         </div>
 
+        <section id="course-catalog" className={activePanel === "course-catalog" ? "space-y-7" : "hidden"}>
+          <header className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-100 bg-white px-5 py-4 shadow-[0_12px_30px_-24px_rgba(15,23,42,0.24)]">
+            <button type="button" className="hidden rounded-xl p-2 text-cert-ink hover:bg-cert-mint lg:inline-flex" aria-label="Open navigation"><Menu size={22} /></button>
+            <label className="flex min-w-0 flex-1 items-center gap-3 rounded-xl bg-slate-100 px-4 py-3 sm:max-w-md"><Search size={19} className="shrink-0 text-slate-500" /><input value={catalogSearch} onChange={(event) => setCatalogSearch(event.target.value)} className="min-w-0 flex-1 bg-transparent text-sm text-cert-ink outline-none placeholder:text-slate-400" placeholder="Search courses..." /></label>
+            <div className="flex items-center gap-3"><span className="relative hidden rounded-xl p-2 text-cert-ink sm:inline-flex"><Bell size={22} /><span className="absolute right-1 top-1 h-4 min-w-4 rounded-full bg-rose-500 px-1 text-center text-[0.6rem] font-bold leading-4 text-white">{Math.min(availableCatalogCourses.length, 9)}</span></span><span className="flex h-10 w-10 items-center justify-center rounded-full bg-cert-mint font-bold text-cert-green-dark">{(profile.full_name || "S").charAt(0).toUpperCase()}</span><div className="hidden sm:block"><p className="font-semibold text-cert-ink">{profile.full_name || "Student"}</p><p className="text-sm text-slate-500">Student</p></div></div>
+          </header>
+
+          <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-cert-green/20 bg-[linear-gradient(100deg,#f5fff8,#eefaf3)] px-5 py-5 sm:px-7"><div className="flex min-w-0 items-center gap-4"><span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-cert-green/15 text-cert-green-dark"><Megaphone size={27} /></span><div><p className="font-semibold text-cert-green-dark">{availableCatalogCourses.length} new course{availableCatalogCourses.length === 1 ? "" : "s"} added!</p><p className="mt-1 text-sm text-slate-600">Check out the latest courses and start learning.</p></div></div><button type="button" onClick={() => setCatalogSearch("")} className="rounded-xl bg-cert-green px-5 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">View all</button></div>
+
+          <div>
+            <div className="flex items-center justify-between gap-4"><h1 className="flex items-center gap-2 text-xl font-bold text-cert-ink"><Sparkles size={23} className="text-cert-yellow" /> New Courses</h1><button type="button" onClick={() => setCatalogSearch("")} className="inline-flex items-center gap-1 text-sm font-semibold text-cert-green-dark hover:underline">View all <ChevronRight size={17} /></button></div>
+            {visibleCatalogCourses.length === 0 ? <div className="mt-5 rounded-[1.75rem] border border-dashed border-cert-line bg-white px-6 py-12 text-center"><BookOpen className="mx-auto text-cert-green-dark" size={30} /><h2 className="mt-4 text-lg font-semibold text-cert-ink">{availableCatalogCourses.length ? "No matching courses" : "No new courses available"}</h2><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">{availableCatalogCourses.length ? "Try a different course search." : "You are already enrolled in every active course. New courses created by the admin will appear here automatically."}</p></div> : <div className="mt-5 grid gap-5 xl:grid-cols-3">{visibleCatalogCourses.slice(0, 3).map((course, index) => {
+              const courseId = String(course.id || course.course_id || "");
+              const description = course.description || course.course_description || "Discover practical skills and build confidence through guided learning.";
+              const usesPythonCover = /python/i.test(titleFor(course, ""));
+              const coverClass = /data\s*(analyst|analytics)|excel|sql/i.test(titleFor(course, "")) ? "bg-[url('/images/course-data-analyst-cover.png')] bg-cover bg-center" : index % 3 === 1 ? "bg-[linear-gradient(135deg,#292474,#4544a0)]" : index % 3 === 2 ? "bg-[linear-gradient(135deg,#062f50,#0d5f7b)]" : "bg-[linear-gradient(135deg,#ddecff,#f5faff)]";
+              return <article key={courseId} className="overflow-hidden rounded-[1.5rem] border border-slate-100 bg-white shadow-[0_14px_30px_-22px_rgba(7,26,47,0.24)]"><div className={`relative h-36 overflow-hidden ${coverClass}`} style={usesPythonCover ? { backgroundImage: "url(/images/course-python-cover.png)", backgroundPosition: "center", backgroundSize: "cover" } : undefined}><span className="absolute left-4 top-4 rounded-full bg-cert-green px-3 py-1 text-xs font-bold uppercase text-white">New</span><span className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-xl bg-white/20 text-white backdrop-blur"><BookOpen size={19} /></span>{!usesPythonCover && <BookOpen className="absolute inset-0 m-auto text-white/75" size={65} />}</div><div className="p-5"><h2 className="break-words text-xl font-bold text-cert-ink">{titleFor(course, "Course")}</h2><p className="mt-2 line-clamp-2 min-h-12 text-sm leading-6 text-slate-600">{description}</p><div className="mt-4 flex flex-wrap gap-x-4 gap-y-2 text-sm text-cert-green-dark"><span className="inline-flex items-center gap-1.5"><Clock3 size={16} />{course.duration || "Flexible"}</span><span className="inline-flex items-center gap-1.5"><BookOpen size={16} />Course outline</span><span className="inline-flex items-center gap-1.5"><UserRound size={16} />{course.trainer_name || "Trainer pending"}</span></div><div className="mt-5 grid grid-cols-2 gap-3"><button type="button" onClick={() => setSelectedCatalogCourseId(selectedCatalogCourseId === courseId ? "" : courseId)} className="rounded-xl border border-cert-green bg-white px-3 py-3 text-sm font-semibold text-cert-green-dark transition hover:bg-cert-mint">View details</button><button type="button" onClick={() => setSelectedCatalogCourseId(courseId)} className="rounded-xl bg-cert-green px-3 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">I'm interested</button></div>{selectedCatalogCourseId === courseId && <div className="mt-4 rounded-xl bg-cert-mint/70 p-4"><p className="text-xs font-bold uppercase tracking-[0.16em] text-cert-green-dark">Course details</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-600">{description}</p><div className="mt-3 grid gap-2 text-sm text-slate-600"><p><strong className="text-cert-ink">Duration:</strong> {course.duration || "Flexible duration"}</p><p><strong className="text-cert-ink">End date:</strong> {course.end_date ? formatAttendanceDate(course.end_date) : "To be announced"}</p><p><strong className="text-cert-ink">Trainer:</strong> {course.trainer_name || "To be assigned"}</p></div></div>}</div></article>;
+            })}</div>}
+          </div>
+
+          {visibleCatalogCourses.length > 3 && <div><div className="flex flex-wrap items-center justify-between gap-4"><h2 className="flex items-center gap-2 text-xl font-bold text-cert-ink"><LayoutGrid size={21} className="text-cert-green-dark" /> All Available Courses</h2><div className="flex items-center gap-2"><button type="button" className="rounded-xl bg-cert-mint p-2 text-cert-green-dark" aria-label="Grid view"><LayoutGrid size={19} /></button><button type="button" className="rounded-xl p-2 text-slate-500" aria-label="List view"><List size={19} /></button></div></div><div className="mt-5 grid gap-5 sm:grid-cols-2 xl:grid-cols-4">{visibleCatalogCourses.slice(3).map((course, index) => { const courseId = String(course.id || course.course_id || ""); const usesPythonCover = /python/i.test(titleFor(course, "")); return <article key={courseId} className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-[0_12px_26px_-22px_rgba(7,26,47,0.2)]"><div className={`relative h-28 ${index % 2 ? "bg-[linear-gradient(135deg,#242b2b,#3b4742)]" : "bg-[linear-gradient(135deg,#153b57,#486a88)]"}`} style={usesPythonCover ? { backgroundImage: "url(/images/course-python-cover.png)", backgroundPosition: "center", backgroundSize: "cover" } : undefined}><BookOpen className="absolute inset-0 m-auto text-white/70" size={44} /></div><div className="p-4"><h3 className="break-words font-bold text-cert-ink">{titleFor(course, "Course")}</h3><p className="mt-2 text-sm text-slate-600">{course.duration || "Flexible duration"} · {course.trainer_name || "Trainer pending"}</p><button type="button" onClick={() => setSelectedCatalogCourseId(courseId)} className="mt-4 w-full rounded-xl border border-cert-green px-3 py-2 text-sm font-semibold text-cert-green-dark hover:bg-cert-mint">View details</button></div></article>; })}</div></div>}
+        </section>
+
+        <section id="course-catalog-legacy" className="hidden">
+          <header className="relative overflow-hidden rounded-[2rem] bg-[radial-gradient(circle_at_88%_12%,rgba(231,232,91,0.3),transparent_26%),linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_140%)] px-5 py-7 text-white shadow-[0_24px_60px_-35px_rgba(7,26,47,0.45)] sm:px-7">
+            <div className="relative flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-yellow">Course catalogue</p><h1 className="mt-2 text-2xl font-semibold sm:text-3xl">Explore your next course</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-emerald-50/85">Browse active courses created by the admin. Open any course that interests you to see its full details.</p></div><span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-cert-yellow"><BookOpen size={23} aria-hidden="true" /></span></div>
+          </header>
+          {catalogCourses.filter((course) => !courses.some((enrolledCourse) => String(enrolledCourse.id || enrolledCourse.course_id || "") === String(course.id || course.course_id || ""))).length === 0 ? <div className="rounded-[2rem] border border-dashed border-cert-line bg-white px-6 py-12 text-center shadow-[0_18px_45px_-36px_rgba(7,26,47,0.2)]"><BookOpen className="mx-auto text-cert-green-dark" size={28} /><h2 className="mt-4 text-lg font-semibold text-cert-ink">No new courses available</h2><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">You are already enrolled in every active course. New courses created by the admin will appear here automatically.</p></div> : <div className="grid gap-5 lg:grid-cols-2">{catalogCourses.filter((course) => !courses.some((enrolledCourse) => String(enrolledCourse.id || enrolledCourse.course_id || "") === String(course.id || course.course_id || ""))).map((course) => {
+            const courseId = String(course.id || course.course_id || "");
+            const isEnrolled = courses.some((enrolledCourse) => String(enrolledCourse.id || enrolledCourse.course_id || "") === courseId);
+            const showDetails = selectedCatalogCourseId === courseId;
+            const description = course.description || course.course_description || "The course outline and learning objectives will be shared by the trainer.";
+            return <article key={courseId} className={`overflow-hidden rounded-[1.75rem] border bg-white shadow-[0_20px_50px_-36px_rgba(7,26,47,0.24)] ${showDetails ? "border-cert-green ring-2 ring-cert-green/15" : "border-cert-line"}`}><div className="bg-[linear-gradient(135deg,#f5fff8_0%,#e9f8ef_100%)] p-5"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Available course</p><h2 className="mt-2 break-words text-xl font-semibold text-cert-ink">{titleFor(course, "Course")}</h2></div>{isEnrolled && <span className="shrink-0 rounded-full bg-cert-green px-3 py-1 text-xs font-bold text-cert-ink">Enrolled</span>}</div><p className="mt-3 line-clamp-3 break-words text-sm leading-6 text-slate-600">{description}</p></div><div className="grid gap-3 p-5 sm:grid-cols-2"><p className="flex items-center gap-2 text-sm text-slate-600"><Clock3 size={16} className="shrink-0 text-cert-green-dark" /> {course.duration || "Flexible duration"}</p><p className="flex items-center gap-2 text-sm text-slate-600"><UserRound size={16} className="shrink-0 text-cert-green-dark" /> {course.trainer_name || "Trainer to be assigned"}</p></div><div className="border-t border-cert-line px-5 py-4"><button type="button" onClick={() => setSelectedCatalogCourseId(showDetails ? "" : courseId)} aria-expanded={showDetails} className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-cert-green px-4 py-3 text-sm font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">{showDetails ? "Hide course details" : "I'm interested — view details"}</button>{showDetails && <div className="mt-4 space-y-4 rounded-2xl bg-cert-mint/60 p-4"><div><p className="text-xs font-bold uppercase tracking-[0.16em] text-cert-green-dark">About this course</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-slate-600">{description}</p></div><div className="grid gap-3 sm:grid-cols-2"><p className="flex items-center gap-2 rounded-xl bg-white px-3 py-3 text-sm text-slate-600 ring-1 ring-cert-line"><Clock3 size={16} className="shrink-0 text-cert-green-dark" /><span><strong className="block text-cert-ink">Duration</strong>{course.duration || "Flexible duration"}</span></p><p className="flex items-center gap-2 rounded-xl bg-white px-3 py-3 text-sm text-slate-600 ring-1 ring-cert-line"><CalendarDays size={16} className="shrink-0 text-cert-green-dark" /><span><strong className="block text-cert-ink">Course end date</strong>{course.end_date ? formatAttendanceDate(course.end_date) : "To be announced"}</span></p></div><p className="rounded-xl border border-cert-green/25 bg-white px-3 py-3 text-sm leading-6 text-slate-600">{isEnrolled ? "You are already enrolled in this course. Return to Courses to continue learning." : "To enroll, contact your admin or trainer with the course name above."}</p></div>}</div></article>;
+          })}</div>}
+        </section>
+
         <div id="student-tasks" className={`grid gap-6 ${activePanel === "task-status" && taskStatusFilter === "approved" ? "" : "xl:grid-cols-[minmax(0,1.15fr)_minmax(22rem,0.85fr)]"} ${(activePanel === "assignments" || activePanel === "projects" || activePanel === "task-status") ? "" : "hidden"}`}>
           <section className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.15)]">
             <header className="border-b border-cert-line bg-[linear-gradient(135deg,#ffffff_0%,#f2fcf6_100%)] px-5 py-5 sm:px-6">
@@ -1252,6 +1387,7 @@ export default function StudentDashboard() {
               ))}
             </div>
           )}
+          {issuedCertificates.length > 0 && <section className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Course reviews</p><h2 className="mt-1 text-2xl font-semibold">Share your learning experience</h2><p className="mt-2 text-sm text-slate-500">Rate your completed course and leave a comment for your trainer.</p></div><div className="mt-5 grid gap-4">{issuedCertificates.map(({ certificate, course }) => { const courseId = String(certificate.course_id || certificate.course || ""); const review = courseReviews.find((item) => String(item.course_id) === courseId); const draft = reviewDrafts[courseId] || {}; return <article key={`review-${courseId}`} className="rounded-2xl border border-cert-line bg-cert-mint/40 p-5"><h3 className="font-semibold text-cert-ink">{titleFor(course, "Course")}</h3>{review ? <div className="mt-3"><p className="font-semibold text-cert-green-dark">{"★".repeat(review.rating)}{"☆".repeat(5 - review.rating)} <span className="ml-2 text-sm text-slate-600">{review.rating}/5</span></p>{review.comment && <p className="mt-2 text-sm text-slate-600">{review.comment}</p>}{review.trainer_feedback && <div className="mt-4 rounded-xl bg-white p-3 text-sm text-slate-600 ring-1 ring-cert-line"><p className="font-semibold text-cert-ink">Trainer feedback</p><p className="mt-1">{review.trainer_feedback}</p></div>}</div> : <form className="mt-4" onSubmit={(event) => submitCourseReview(event, courseId)}><div className="flex gap-1" aria-label="Course rating">{[1, 2, 3, 4, 5].map((rating) => <button key={rating} type="button" onClick={() => setReviewDrafts((current) => ({ ...current, [courseId]: { ...draft, rating } }))} className={`text-2xl ${rating <= Number(draft.rating || 0) ? "text-cert-yellow" : "text-slate-300"}`} aria-label={`${rating} star${rating === 1 ? "" : "s"}`}>★</button>)}</div><textarea value={draft.comment || ""} onChange={(event) => setReviewDrafts((current) => ({ ...current, [courseId]: { ...draft, comment: event.target.value } }))} placeholder="Tell us about your course experience (optional)" className="mt-3 min-h-24 w-full rounded-xl border border-cert-line bg-white p-3 text-sm outline-none focus:border-cert-green" /><button type="submit" disabled={!draft.rating} className="mt-3 rounded-xl bg-cert-green px-4 py-2 text-sm font-semibold text-cert-ink disabled:cursor-not-allowed disabled:bg-slate-200">Submit review</button></form>}</article>; })}</div></section>}
             <div id="course-progress" className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)]">
               <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Course certificate</p><h2 className="mt-1 text-xl font-semibold text-cert-ink">Certificate progress</h2></div><label className="grid gap-1 text-xs font-semibold text-slate-500"><span>Choose course</span><select value={selectedCourse?.id || selectedCourse?.course_id || ""} onChange={(event) => setSelectedCourseId(event.target.value)} className="rounded-xl border border-cert-line bg-white px-3 py-2 text-sm font-semibold text-cert-ink outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15">{courses.map((course) => <option key={course.id || course.course_id} value={String(course.id || course.course_id)}>{titleFor(course, "Course")}</option>)}</select></label></div>
               <p className="mt-2 text-sm text-slate-500">After your course work is approved, you must pass the final certificate test with more than 75% before your trainer can issue the certificate.</p>
@@ -1260,6 +1396,7 @@ export default function StudentDashboard() {
                 const attemptIsScheduled = nextAttemptAt && nextAttemptAt.getTime() > Date.now();
                 const attemptsUsed = Number(selectedCertificateTest.attempt_count || 0);
                 const answers = certificateTestAnswers[selectedCertificateTest.id] || {};
+                return <section className="mt-6 overflow-hidden rounded-[1.75rem] border border-cert-green/25 bg-white shadow-[0_18px_42px_-32px_rgba(7,26,47,0.28)]"><header className="border-b border-cert-line bg-[linear-gradient(135deg,#edf9f1_0%,#f9fffb_100%)] px-5 py-5"><div className="flex flex-wrap items-start justify-between gap-4"><div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Final certificate test</p><h3 className="mt-2 break-words text-xl font-semibold text-cert-ink">{selectedCertificateTest.title}</h3><p className="mt-2 text-xs text-slate-500">Mixed assessment: multiple choice, true/false, short answer, and coding.</p></div><div className="flex flex-wrap gap-2"><span className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-cert-green-dark ring-1 ring-cert-green/25">Pass: &gt;{selectedCertificateTest.passing_score}%</span><span className="rounded-full bg-cert-ink px-3 py-1.5 text-xs font-bold text-cert-yellow">{attemptsUsed}/3 attempts</span></div></div></header><div className="bg-[linear-gradient(180deg,#fbfefd_0%,#f5faf7_100%)] p-5 sm:p-6">{selectedCertificateTest.passed ? <p className="rounded-xl bg-emerald-100 px-3 py-2 text-sm font-semibold text-emerald-800">Passed{selectedCertificateTest.latest_score !== null ? ` with ${selectedCertificateTest.latest_score}%` : ""}. Your certificate is ready.</p> : attemptsUsed >= 3 ? <p className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-700">All three attempts have been used. Contact your trainer for guidance.</p> : attemptIsScheduled ? <p className="rounded-xl bg-amber-50 px-3 py-2 text-sm text-amber-800">Your next attempt is rescheduled for {nextAttemptAt.toLocaleString()}.</p> : <div className="space-y-5">{selectedCertificateTest.questions.map((question, questionIndex) => <CertificateQuestionInput key={question.id} question={question} questionIndex={questionIndex} testId={selectedCertificateTest.id} answer={answers[question.id]} onAnswer={(value) => setCertificateTestAnswers({ ...certificateTestAnswers, [selectedCertificateTest.id]: { ...answers, [question.id]: value } })} />)}<button type="button" onClick={() => submitCertificateTest(selectedCertificateTest)} disabled={submittingCertificateTestId === selectedCertificateTest.id} className="w-full rounded-xl bg-cert-green px-5 py-3.5 text-sm font-semibold text-cert-ink shadow-[0_16px_28px_-18px_rgba(13,143,85,0.65)] transition hover:bg-cert-green-dark hover:text-white disabled:bg-slate-300">{submittingCertificateTestId === selectedCertificateTest.id ? "Submitting test..." : "Submit certificate test"}</button></div>}{certificateTestMessage && <p className="mt-4 break-words rounded-xl bg-white px-3 py-2 text-sm text-cert-ink ring-1 ring-cert-line">{certificateTestMessage}</p>}</div></section>;
                 return <section className="mt-6 overflow-hidden rounded-[1.75rem] border border-cert-green/25 bg-white shadow-[0_18px_42px_-32px_rgba(7,26,47,0.28)]">
                   <header className="border-b border-cert-line bg-[linear-gradient(135deg,#edf9f1_0%,#f9fffb_100%)] px-5 py-5"><div className="flex flex-wrap items-start justify-between gap-4"><div><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Final certificate test</p><h3 className="mt-2 text-xl font-semibold text-cert-ink">{selectedCertificateTest.title}</h3></div><div className="flex gap-2"><span className="rounded-full bg-white px-3 py-1.5 text-xs font-bold text-cert-green-dark ring-1 ring-cert-green/25">Pass: &gt;{selectedCertificateTest.passing_score}%</span><span className="rounded-full bg-cert-ink px-3 py-1.5 text-xs font-bold text-cert-yellow">{attemptsUsed}/3 attempts</span></div></div></header>
                   <div className="bg-[linear-gradient(180deg,#fbfefd_0%,#f5faf7_100%)] p-5 sm:p-6">
@@ -1272,7 +1409,13 @@ export default function StudentDashboard() {
                 <div className="h-full rounded-full bg-cert-green" style={{ width: `${courseStats.progress}%` }} />
               </div>
               <p className="mt-4 text-sm text-slate-500">{courseStats.approved} of {courseStats.totalTasks} required tasks approved for {titleFor(selectedCourse, "this course")}.</p>
-              <div className="mt-5 rounded-2xl bg-cert-mint px-4 py-3 text-sm text-slate-600"><p className="font-semibold text-cert-ink">Almost there</p><p className="mt-1">After the remaining work is approved, the certificate will appear here to download.</p></div>
+              {issuedCertificates.some(({ certificate }) => String(certificate.course_id || certificate.course || "") === String(selectedCourse?.id || selectedCourse?.course_id || "")) ? (
+                <div className="mt-5 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800"><p className="font-semibold">Certificate issued</p><p className="mt-1">Your certificate is ready to download above.</p></div>
+              ) : courseStats.eligible && selectedCertificateTest?.passed ? (
+                <div className="mt-5 rounded-2xl bg-sky-50 px-4 py-3 text-sm text-sky-800"><p className="font-semibold">Waiting for your trainer</p><p className="mt-1">You completed the required work and passed the final test. Your trainer can now issue the certificate.</p></div>
+              ) : (
+                <div className="mt-5 rounded-2xl bg-cert-mint px-4 py-3 text-sm text-slate-600"><p className="font-semibold text-cert-ink">Almost there</p><p className="mt-1">After the remaining work is approved, the certificate will appear here to download.</p></div>
+              )}
             </div>
         </div>
       </section>

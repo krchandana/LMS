@@ -45,8 +45,10 @@ serve(async (req) => {
       .select("id, student_id, course_id, issued_by, certificate_number, issue_date")
       .eq("id", certificateId)
       .maybeSingle();
-    if (certificateError || !certificate || certificate.issued_by !== userData.user.id) {
-      return Response.json({ error: "Certificate was not found for this trainer." }, { status: 403, headers: corsHeaders });
+    const isIssuer = certificate?.issued_by === userData.user.id;
+    const isCertificateStudent = certificate?.student_id === userData.user.id;
+    if (certificateError || !certificate || (!isIssuer && !isCertificateStudent)) {
+      return Response.json({ error: "Certificate was not found for this account." }, { status: 403, headers: corsHeaders });
     }
 
     const [{ data: student }, { data: course }] = await Promise.all([

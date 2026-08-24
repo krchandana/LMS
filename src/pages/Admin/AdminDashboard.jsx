@@ -465,6 +465,13 @@ const fmtDate = (value) => {
   return date.toLocaleDateString();
 };
 
+const formatCourseDuration = (value) => {
+  const duration = String(value || "").trim();
+  if (!duration) return "";
+  if (!/^\d+(?:\.\d+)?$/.test(duration)) return duration;
+  return `${duration} ${Number(duration) === 1 ? "week" : "weeks"}`;
+};
+
 const courseDurationComplete = (course) => {
   const endDate = course?.end_date;
   if (!endDate) return false;
@@ -517,6 +524,7 @@ export default function AdminDashboard() {
   const [courseTitle, setCourseTitle] = useState("");
   const [courseDescription, setCourseDescription] = useState("");
   const [courseDuration, setCourseDuration] = useState("");
+  const [courseDurationUnit, setCourseDurationUnit] = useState("weeks");
   const [courseEndDate, setCourseEndDate] = useState("");
   const [courseStatus, setCourseStatus] = useState("active");
   const [insightQuery, setInsightQuery] = useState("");
@@ -1538,9 +1546,9 @@ export default function AdminDashboard() {
       return;
     }
 
-    if (!courseDuration.trim()) {
+    if (!courseDuration.trim() || Number(courseDuration) <= 0) {
       setSaving(false);
-      setError("Course duration is required.");
+      setError("Enter a course duration greater than zero.");
       return;
     }
 
@@ -1556,7 +1564,7 @@ export default function AdminDashboard() {
       course_name: courseTitle.trim(),
       description: courseDescription.trim() || null,
       course_description: courseDescription.trim() || null,
-      duration: courseDuration.trim() || null,
+      duration: `${courseDuration.trim()} ${courseDurationUnit}`,
       end_date: courseEndDate,
       status: courseStatus,
     };
@@ -1580,6 +1588,7 @@ export default function AdminDashboard() {
       setCourseTitle("");
       setCourseDescription("");
       setCourseDuration("");
+      setCourseDurationUnit("weeks");
       setCourseEndDate("");
       setCourseStatus("active");
       await loadData();
@@ -2342,7 +2351,7 @@ export default function AdminDashboard() {
                           <div className="mt-auto">
                             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cert-green">Online learning</p>
                             <p className="mt-2 text-xl font-semibold leading-tight">{firstValue(course.title, course.name, course.course_name, "Course")}</p>
-                            <span className="mt-4 inline-block rounded-md bg-cert-green px-2.5 py-1 text-xs font-bold text-cert-ink">{firstValue(course.duration, "Flexible duration")}</span>
+                            <span className="mt-4 inline-block rounded-md bg-cert-green px-2.5 py-1 text-xs font-bold text-cert-ink">{firstValue(formatCourseDuration(course.duration), "Flexible duration")}</span>
                           </div>
                         </div>
                       )}
@@ -2351,7 +2360,7 @@ export default function AdminDashboard() {
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div>
                             <h3 className="text-2xl font-semibold text-cert-ink">{firstValue(course.title, course.name, course.course_name, "Untitled course")}</h3>
-                            <p className="mt-2 text-sm font-medium text-cert-ink">{firstValue(course.duration, "Duration unavailable")} | Ends {course.end_date ? fmtDate(course.end_date) : "not scheduled"} | Online</p>
+                            <p className="mt-2 text-sm font-medium text-cert-ink">{firstValue(formatCourseDuration(course.duration), "Duration unavailable")} | Ends {course.end_date ? fmtDate(course.end_date) : "not scheduled"} | Online</p>
                           </div>
                           <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] ${(course.status || "active").toLowerCase() === "active" ? "bg-cert-green/15 text-cert-green-dark" : "bg-slate-200 text-slate-600"}`}>
                             {course.status || "active"}
@@ -2385,7 +2394,7 @@ export default function AdminDashboard() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Duration</label>
-                  <input value={courseDuration} onChange={(event) => setCourseDuration(event.target.value)} className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" placeholder="16 weeks" required />
+                  <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem]"><input type="number" min="1" step="1" value={courseDuration} onChange={(event) => setCourseDuration(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15" placeholder="2" required /><select value={courseDurationUnit} onChange={(event) => setCourseDurationUnit(event.target.value)} className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm outline-none focus:border-cert-green focus:bg-white focus:ring-4 focus:ring-cert-green/15"><option value="weeks">Weeks</option><option value="months">Months</option><option value="years">Years</option></select></div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700">Course end date</label>

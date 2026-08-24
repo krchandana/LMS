@@ -171,7 +171,7 @@ serve(async (req) => {
           model: Deno.env.get("OPENAI_TEST_GENERATION_MODEL") || "gpt-4o-mini",
           store: false,
           input: [
-            { role: "system", content: "You create fair final-course multiple-choice assessments. Use only the supplied course material. Produce three different sets of five practical questions. Never repeat a question, answer, or distractor across sets. Each question needs one unambiguously correct answer and three plausible distractors. Do not include answers or explanations in question text." },
+            { role: "system", content: "You create fair final-course assessments. Use only the supplied course material. Produce three different sets of five practical multiple-choice questions with clear, unambiguous answers. Questions are later combined with true/false, short-answer, and coding questions at Easy, Medium, and Hard levels. Never repeat a question, answer, or distractor across sets." },
             { role: "user", content: `Create a certificate test for this course material:\n${JSON.stringify(learningContext)}` },
           ],
           text: { format: { type: "json_schema", name: "certificate_test", strict: true, schema: quizSchema } },
@@ -195,7 +195,20 @@ serve(async (req) => {
       const questionKey = questionText.toLocaleLowerCase().replace(/\s+/g, " ");
       if (questionTexts.has(questionKey)) throw new Error("The generated test repeated a question. Please generate it again.");
       questionTexts.add(questionKey);
-      return { id: `s${setIndex + 1}q${questionIndex + 1}`, question: questionText, options, correct_option: String(correctIndex) };
+      const id = `s${setIndex + 1}q${questionIndex + 1}`;
+      const difficulty = ["Easy", "Medium", "Hard", "Medium", "Easy"][questionIndex];
+      const topicIndex = questionIndex + setIndex;
+      const topic = requiredString(learningContext.assignments[topicIndex % Math.max(learningContext.assignments.length, 1)]?.title) || requiredString(learningContext.projects[topicIndex % Math.max(learningContext.projects.length, 1)]?.title) || learningContext.title;
+      if (questionIndex === 1) {
+        return { id, type: "true_false", difficulty, question: `True or false: Following the course requirements for ${topic} is important for successful completion.`, options: ["True", "False"], correct_option: "0" };
+      }
+      if (questionIndex === 2) {
+        return { id, type: "short_answer", difficulty, question: `In one or two sentences, explain one important idea you learned about ${topic}.`, correct_keywords: [requiredString(topic).split(/\s+/)[0].toLowerCase()] };
+      }
+      if (questionIndex === 3) {
+        return { id, type: "coding", difficulty, question: `Write a short code or pseudocode function for a ${topic} task in ${learningContext.title}. Your function should accept an input and return a result.`, correct_keywords: ["return"] };
+      }
+      return { id, type: "multiple_choice", difficulty, question: questionText, options, correct_option: String(correctIndex) };
       });
     });
 

@@ -226,6 +226,7 @@ export default function TrainerDashboard() {
   const [projects, setProjects] = useState([]);
   const [submissions, setSubmissions] = useState([]);
   const [certificates, setCertificates] = useState([]);
+  const [courseReviews, setCourseReviews] = useState([]);
   const [certificateTests, setCertificateTests] = useState([]);
   const [certificateTestAttempts, setCertificateTestAttempts] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -302,6 +303,10 @@ export default function TrainerDashboard() {
         : await fetchRows("certificates", (query) => query.in("course_id", courseIds)))
       : [];
     const certificateRows = allCertificates.filter((certificate) => courseIds.some((courseId) => String(courseId) === String(certificate.course_id)));
+    const allCourseReviews = courseIds.length
+      ? (hasServiceRoleKey ? await fetchRowsWithServiceRole("course_reviews") : await fetchRows("course_reviews", (query) => query.in("course_id", courseIds)))
+      : [];
+    const courseReviewRows = allCourseReviews.filter((review) => courseIds.some((courseId) => String(courseId) === String(review.course_id)));
     const allCertificateTests = courseIds.length
       ? (hasServiceRoleKey ? await fetchRowsWithServiceRole("course_certificate_tests") : await fetchRows("course_certificate_tests", (query) => query.in("course_id", courseIds)))
       : [];
@@ -338,6 +343,7 @@ export default function TrainerDashboard() {
     setProjects(projectRows);
     setSubmissions(submissionRows);
     setCertificates(certificateRows);
+    setCourseReviews(courseReviewRows);
     setCertificateTests(certificateTestRows);
     setCertificateTestAttempts(certificateTestAttemptRows);
     setNotifications(notificationRows);
@@ -348,6 +354,14 @@ export default function TrainerDashboard() {
 
   useEffect(() => {
     loadDashboard();
+  }, [profile?.id]);
+
+  useEffect(() => {
+    if (!profile?.id) return undefined;
+    const reviewChannel = supabase.channel(`trainer-course-reviews-${profile.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "course_reviews" }, () => loadDashboard())
+      .subscribe();
+    return () => { supabase.removeChannel(reviewChannel); };
   }, [profile?.id]);
 
   useEffect(() => {
@@ -838,6 +852,7 @@ export default function TrainerDashboard() {
     }
   };
 
+
   const reviewSubmission = async (submission, status) => {
     setError("");
     setMessage("");
@@ -1082,6 +1097,7 @@ export default function TrainerDashboard() {
 
         {activeWorkspace === "certificate-approvals" && <section className="overflow-hidden rounded-[1.9rem] border border-cert-line bg-white shadow-[0_24px_60px_-35px_rgba(15,23,42,0.16)]">
           <header className="flex flex-wrap items-center justify-between gap-4 border-b border-cert-line bg-[linear-gradient(135deg,#f4fff8_0%,#e9f8ef_100%)] px-6 py-6"><div><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Certificate approvals</p><h2 className="mt-2 text-2xl font-semibold text-cert-ink">Issue student certificates</h2><p className="mt-1 text-sm text-slate-500">Approve and send a certificate for each enrolled student and course.</p></div><span className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-cert-green-dark ring-1 ring-cert-line"><Award size={23} /></span></header>
+          {courseReviews.length > 0 && <div className="border-b border-cert-line bg-white p-5"><p className="text-xs font-bold uppercase tracking-[0.18em] text-cert-green-dark">Course reviews</p><div className="mt-4 space-y-3">{courseReviews.map((review) => { const student = studentById.get(String(review.student_id)); const course = courseById.get(String(review.course_id)); return <article key={review.id} className="rounded-2xl border border-cert-line bg-cert-mint/40 p-4"><div className="flex flex-wrap justify-between gap-3"><div><p className="font-semibold text-cert-ink">{titleFor(student, "Student")} · {titleFor(course, "Course")}</p>{review.comment && <p className="mt-1 text-sm text-slate-600">{review.comment}</p>}</div><p className="font-bold text-cert-yellow">{"★".repeat(review.rating)}<span className="text-slate-300">{"☆".repeat(5 - review.rating)}</span></p></div></article>; })}</div></div>}
           <div className="space-y-6 bg-[linear-gradient(180deg,#fbfefd_0%,#f5faf7_100%)] p-5 sm:p-6">
             {certificateApprovalGroups.length === 0 ? <p className="rounded-2xl bg-cert-mint p-5 text-sm text-slate-500">No students are waiting for a certificate.</p> : certificateApprovalGroups.map(({ courseId, course, approvals }) => {
               const readyCount = approvals.filter((approval) => approval.issueReady).length;

@@ -7,6 +7,7 @@ import TrainerDashboard from "./pages/Trainer/TrainerDashboard";
 import TrainerLogin from "./pages/Trainer/login";
 import TrainerResetPassword from "./pages/Trainer/ResetPassword";
 import StudentDashboard from "./pages/Student/StudentDashboard";
+import CertificateVerification from "./pages/CertificateVerification";
 import ProtectedRoute from "./routes/ProtectedRoute";
 import { AuthProvider } from "./context/AuthContext";
 
@@ -27,6 +28,7 @@ export default function App() {
           <Route path="/admin-login" element={<AdminLogin />} />
           <Route path="/trainer-login" element={<TrainerLogin />} />
           <Route path="/trainer-reset-password" element={<TrainerResetPassword />} />
+          <Route path="/verify/:certificateId" element={<CertificateVerification />} />
 
           {/* ADMIN */}
           <Route

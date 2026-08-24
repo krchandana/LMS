@@ -20,6 +20,11 @@ enabled = true
 verify_jwt = true
 entrypoint = "./functions/send-certificate-email/index.ts"
 
+[functions.verify-certificate]
+enabled = true
+verify_jwt = false
+entrypoint = "./functions/verify-certificate/index.ts"
+
 [functions.generate-certificate-test]
 enabled = true
 verify_jwt = true
