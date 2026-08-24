@@ -23,6 +23,54 @@ const emptyData = [];
 const titleFor = (item, fallback = "Untitled") =>
   item?.title || item?.name || item?.course_name || item?.project_name || item?.assignment_name || item?.full_name || fallback;
 
+const tutorExplanation = (question, topic, context) => {
+  const prompt = String(question || "").trim();
+  const normalized = prompt.toLowerCase();
+  if (!prompt) return "Ask me about a course topic, task requirement, or concept you want to understand.";
+  if (normalized.includes("llm") || normalized.includes("large language model")) {
+    return "LLM means Large Language Model. It is an AI system trained on large amounts of text so it can understand prompts and generate human-like responses. In an agentic AI system, an LLM usually acts as the reasoning engine that plans steps, uses tools, and responds to results.";
+  }
+  if (normalized.includes("agentic ai") || normalized.includes("ai agent") || normalized.includes("ai agents")) {
+    return "Agentic AI refers to AI systems that can pursue a goal through multiple steps. An agent can interpret a request, make a plan, use tools or data, check the result, and adjust its next action. An LLM often provides the language understanding and reasoning inside the agent.";
+  }
+  if (normalized.includes("data analyst") || normalized.includes("data analysis")) {
+    return "Data analysis is the process of inspecting, cleaning, and interpreting data to find useful patterns and support decisions. A good analysis starts with a clear question, checks data quality, explores trends, and explains the result with evidence.";
+  }
+  if (normalized.includes("how") || normalized.includes("step") || normalized.includes("start")) {
+    return `Start with the goal for ${topic}, then break the work into small steps. Check each step against the requirements${context ? `: ${context.slice(0, 180)}${context.length > 180 ? "..." : ""}` : ""}. Finish by testing or reviewing your result before submitting.`;
+  }
+  if (normalized.includes("why") || normalized.includes("explain") || normalized.includes("mean")) {
+    return `${topic} is best understood as a process: identify the requirement, choose an approach that satisfies it, and verify the outcome. The important idea is not just getting an answer, but being able to explain why the approach works.`;
+  }
+  return `For ${topic}, connect your question to the expected outcome. Define the key terms, apply the idea to a small example, and compare the result with the course requirements. That gives you a reliable way to learn the concept instead of memorizing a single answer.`;
+};
+
+const assessmentQuestionsFor = (topic) => {
+  const normalizedTopic = String(topic || "").toLowerCase();
+  if (normalizedTopic.includes("data") || normalizedTopic.includes("analyst")) return [
+    { id: "data-question", prompt: "A dataset contains missing values in the income column. What should you do before calculating the average income?", options: ["Inspect why values are missing and choose a justified treatment", "Replace every missing value with zero without checking", "Delete the entire dataset"], answer: 0 },
+    { id: "analysis-question", prompt: "Which measure is usually more resistant to extreme outliers in a dataset?", options: ["Median", "Mean", "Maximum"], answer: 0 },
+    { id: "insight-question", prompt: "What makes a data-analysis conclusion reliable?", options: ["It is supported by validated data and clearly states its limitations", "It uses the most complicated chart available", "It confirms the first assumption without testing it"], answer: 0 },
+  ];
+  if (normalizedTopic.includes("agentic") || normalizedTopic.includes("ai agent")) return [
+    { id: "agent-question", prompt: "What distinguishes an agentic AI system from a chatbot that only returns one response?", options: ["It can plan and take multiple actions toward a goal", "It always gives a shorter answer", "It does not need an objective"], answer: 0 },
+    { id: "tool-question", prompt: "Why should an AI agent verify the result after using a tool?", options: ["To catch errors before using the result in its next step", "To make the process less transparent", "To avoid checking whether the task was completed"], answer: 0 },
+    { id: "safety-question", prompt: "Which practice makes an AI agent safer to operate?", options: ["Limit tool permissions and require confirmation for high-impact actions", "Give the agent unrestricted access to every system", "Hide the agent's actions from the user"], answer: 0 },
+  ];
+  return [
+    { id: "requirements-question", prompt: `What is the first step when solving a problem about ${topic}?`, options: ["Clarify the goal and identify the requirements", "Start changing values until something works", "Submit work before checking the result"], answer: 0 },
+    { id: "evidence-question", prompt: "How should you check whether your solution is correct?", options: ["Test it with suitable examples and explain the result", "Assume it is correct because it runs once", "Ignore unexpected output"], answer: 0 },
+    { id: "feedback-question", prompt: "What is the best response to useful feedback on your work?", options: ["Apply the feedback, retest the work, and explain the change", "Ignore it and submit the same version", "Remove the part that received feedback"], answer: 0 },
+  ];
+};
+
+const assessmentTopicFor = (task, course) => {
+  const rawTopic = `${titleFor(task, "")} ${titleFor(course, "")}`.toLowerCase();
+  if (rawTopic.includes("data") || rawTopic.includes("analyst")) return "Data Analysis";
+  if (rawTopic.includes("agentic") || rawTopic.includes("ai agent")) return "Agentic AI";
+  return titleFor(task, titleFor(course, "your current course topic"));
+};
+
 const currentDate = new Date().toISOString().slice(0, 10);
 const taskEndDate = (task) => task?.end_date || task?.due_date || "";
 const taskIsPastEndDate = (task) => Boolean(taskEndDate(task) && taskEndDate(task) < currentDate);
@@ -284,6 +332,10 @@ export default function StudentDashboard() {
   const [certificateTestAnswers, setCertificateTestAnswers] = useState({});
   const [certificateTestMessage, setCertificateTestMessage] = useState("");
   const [submittingCertificateTestId, setSubmittingCertificateTestId] = useState("");
+  const [assessmentAnswers, setAssessmentAnswers] = useState({});
+  const [assessmentSubmitted, setAssessmentSubmitted] = useState(false);
+  const [tutorQuestion, setTutorQuestion] = useState("");
+  const [tutorResponse, setTutorResponse] = useState("");
   const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [submissionTask, setSubmissionTask] = useState(null);
   const [workFiles, setWorkFiles] = useState([]);
@@ -624,6 +676,103 @@ export default function StudentDashboard() {
       eligible: totalTasks > 0 && approved === totalTasks,
     };
   }, [selectedCourse, taskSummaries]);
+  const studentAgent = useMemo(() => {
+    const courseProgress = new Map();
+    courses.forEach((course) => {
+      const courseId = String(course.id || course.course_id || "");
+      const courseTasks = taskSummaries.filter((task) => String(task.course_id || task.course || "") === courseId);
+      const approved = courseTasks.filter((task) => task.status === "approved").length;
+      courseProgress.set(courseId, {
+        course,
+        progress: courseTasks.length ? Math.round((approved / courseTasks.length) * 100) : 0,
+        taskCount: courseTasks.length,
+      });
+    });
+
+    const recommendedTask = taskSummaries.find((task) => task.status === "rejected")
+      || taskSummaries.find((task) => task.status === "pending")
+      || null;
+    if (recommendedTask) {
+      const course = courseById.get(String(recommendedTask.course_id || recommendedTask.course || ""));
+      const isRevision = recommendedTask.status === "rejected";
+      return {
+        type: "task",
+        title: titleFor(recommendedTask, "your next task"),
+        course,
+        reason: isRevision
+          ? "Your revision is the quickest way to turn feedback into progress."
+          : "This is the next open piece of work in your learning path.",
+        actionLabel: isRevision ? "Continue revision" : "Start task",
+        task: recommendedTask,
+      };
+    }
+
+    const nextCourse = [...courseProgress.values()]
+      .filter(({ taskCount }) => taskCount > 0)
+      .sort((first, second) => first.progress - second.progress)[0];
+    if (nextCourse) {
+      return {
+        type: "course",
+        title: titleFor(nextCourse.course, "your next course focus"),
+        course: nextCourse.course,
+        reason: `You have completed ${nextCourse.progress}% of this course. A focused lesson will keep your momentum going.`,
+        actionLabel: "Open course",
+      };
+    }
+
+    return {
+      type: "empty",
+      title: "Build your learning path",
+      reason: courses.length ? "Your course work is up to date. Explore a lesson or browse the course catalog next." : "Explore the catalog to find your first course.",
+      actionLabel: courses.length ? "View courses" : "Explore courses",
+    };
+  }, [courseById, courses, taskSummaries]);
+  const learningPath = useMemo(() => courses
+    .map((course) => {
+      const courseId = String(course.id || course.course_id || "");
+      const courseTasks = taskSummaries.filter((task) => String(task.course_id || task.course || "") === courseId);
+      const actionableTask = courseTasks.find((task) => task.status === "rejected")
+        || courseTasks.find((task) => task.status === "pending")
+        || null;
+      const completedTasks = courseTasks.filter((task) => task.status === "approved").length;
+      return {
+        course,
+        task: actionableTask,
+        progress: courseTasks.length ? Math.round((completedTasks / courseTasks.length) * 100) : 0,
+      };
+    })
+    .sort((first, second) => first.progress - second.progress)
+    .slice(0, 4)
+    .map((step, index) => ({
+      ...step,
+      number: index + 1,
+      title: step.task ? titleFor(step.task, "Complete the next task") : `Watch a lesson in ${titleFor(step.course, "your course")}`,
+      detail: step.task
+        ? `${step.task.status === "rejected" ? "Revision" : "Next task"} · ${step.progress}% course progress`
+        : `${step.progress}% course progress · build your foundation`,
+    })), [courses, taskSummaries]);
+  const assessmentAgent = useMemo(() => {
+    const selectedCourseKey = String(selectedCourse?.id || selectedCourse?.course_id || "");
+    const courseTasks = taskSummaries.filter((task) => String(task.course_id || task.course || "") === selectedCourseKey);
+    const weakTask = courseTasks.find((task) => task.status === "rejected")
+      || courseTasks.find((task) => task.status === "pending")
+      || courseTasks.find((task) => task.status === "submitted")
+      || null;
+    const course = selectedCourse || (weakTask ? courseById.get(String(weakTask.course_id || weakTask.course || "")) : null);
+    const topic = assessmentTopicFor(weakTask, course);
+    const questions = course ? assessmentQuestionsFor(topic) : [];
+    return {
+      topic,
+      course,
+      sourceTask: weakTask,
+      questions,
+      reason: weakTask?.status === "rejected"
+        ? "This practice set targets the topic connected to your revision feedback."
+        : courseTasks.length
+          ? "This practice set targets the selected course and its next learning task."
+          : "This practice set targets the selected course topic.",
+    };
+  }, [courseById, selectedCourse, taskSummaries]);
   const attendanceByCourse = useMemo(() => {
     const stats = new Map();
     courses.forEach((course) => {
@@ -660,6 +809,56 @@ export default function StudentDashboard() {
   const selectedCertificateTest = useMemo(() => certificateTests.find((test) =>
     String(test.course_id) === String(selectedCourse?.id || selectedCourse?.course_id || "")
   ) || null, [certificateTests, selectedCourse]);
+  const certificateAgent = useMemo(() => {
+    const selectedCourseKey = String(selectedCourse?.id || selectedCourse?.course_id || "");
+    const issuedCertificate = issuedCertificates.find(({ certificate }) => String(certificate.course_id || certificate.course || "") === selectedCourseKey);
+    const courseTasks = taskSummaries.filter((task) => String(task.course_id || task.course || "") === selectedCourseKey);
+    const incompleteTasks = courseTasks.filter((task) => !["approved"].includes(task.status));
+    const attemptsUsed = Number(selectedCertificateTest?.attempt_count || 0);
+
+    if (issuedCertificate) return {
+      status: "issued",
+      title: "Certificate issued",
+      detail: "Your completion conditions are met and your certificate is ready to download.",
+      actionLabel: "View certificate",
+    };
+    if (!selectedCourse) return {
+      status: "choose-course",
+      title: "Choose a course",
+      detail: "Select a course to check its completion and certificate conditions.",
+      actionLabel: "Open certificate centre",
+    };
+    if (incompleteTasks.length) return {
+      status: "coursework",
+      title: `${incompleteTasks.length} task${incompleteTasks.length === 1 ? "" : "s"} still to approve`,
+      detail: "Finish and submit the remaining work. Every required task must be approved before the final test unlocks.",
+      actionLabel: "View remaining work",
+    };
+    if (!selectedCertificateTest) return {
+      status: "awaiting-test",
+      title: "Final test not available yet",
+      detail: "Your course work is complete. Your trainer still needs to create the final certificate test.",
+      actionLabel: "View certificate centre",
+    };
+    if (selectedCertificateTest.passed) return {
+      status: "awaiting-issue",
+      title: "Passed, awaiting issue",
+      detail: `You passed with ${selectedCertificateTest.latest_score ?? "a qualifying score"}. Your trainer can now issue the certificate.`,
+      actionLabel: "View result",
+    };
+    if (attemptsUsed >= 3) return {
+      status: "attempts-used",
+      title: "Attempts completed",
+      detail: "All three final-test attempts have been used. Contact your trainer for guidance.",
+      actionLabel: "View test details",
+    };
+    return {
+      status: "ready",
+      title: "Ready for the final test",
+      detail: `All ${courseTasks.length} required tasks are approved. Pass above ${selectedCertificateTest.passing_score}% to complete your certificate workflow.`,
+      actionLabel: "Take final test",
+    };
+  }, [issuedCertificates, selectedCertificateTest, selectedCourse, taskSummaries]);
   const selectedCourseVideoRecord = useMemo(() => {
     const selectedCourseKey = String(selectedCourse?.id || selectedCourse?.course_id || "");
     const now = Date.now();
@@ -791,6 +990,22 @@ export default function StudentDashboard() {
 
   const openTaskPage = (taskType) => {
     openPanel(taskType === "project" ? "projects" : "assignments", { taskType });
+  };
+
+  const openCourse = (courseId) => {
+    setSelectedCourseId(String(courseId || ""));
+    setAssessmentAnswers({});
+    setAssessmentSubmitted(false);
+    window.setTimeout(() => document.getElementById("enrolled-courses")?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+  };
+
+  const submitAssessment = () => setAssessmentSubmitted(true);
+
+  const askTutor = (event) => {
+    event.preventDefault();
+    const topic = assessmentAgent.topic || titleFor(selectedCourse, "your course topic");
+    const context = assessmentAgent.sourceTask?.description || selectedCourse?.description || "";
+    setTutorResponse(tutorExplanation(tutorQuestion, topic, context));
   };
 
   const submitWork = async (event) => {
@@ -992,7 +1207,7 @@ export default function StudentDashboard() {
             <span className="text-xs font-medium text-slate-400">Select to open the course lesson</span>
             <button
               type="button"
-              onClick={() => setSelectedCourseId(courseId)}
+              onClick={() => openCourse(courseId)}
               className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-semibold transition ${isSelected ? "bg-cert-green text-cert-ink" : "bg-cert-mint text-cert-green-dark hover:bg-cert-green hover:text-cert-ink"}`}
             >
               <Play size={15} fill="currentColor" aria-hidden="true" />
@@ -1175,6 +1390,108 @@ export default function StudentDashboard() {
           </div>
         </div>
       </section>
+
+      {activePanel === "courses" && <section className="overflow-hidden rounded-[2rem] border border-cert-navy/15 bg-[linear-gradient(115deg,#06324f_0%,#07514f_58%,#0c7952_100%)] p-6 text-white shadow-[0_24px_60px_-32px_rgba(6,50,79,0.48)] sm:p-7" aria-labelledby="student-agent-heading">
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-start gap-4">
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-cert-yellow text-cert-ink shadow-lg shadow-black/10"><Sparkles size={23} aria-hidden="true" /></span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2"><p className="text-xs font-bold uppercase tracking-[0.2em] text-cert-yellow">Student Agent</p><span className="rounded-full border border-white/20 bg-white/10 px-2 py-1 text-[0.6rem] font-semibold uppercase tracking-[0.14em] text-white/75">Based on your progress</span></div>
+              <h2 id="student-agent-heading" className="mt-2 text-2xl font-bold tracking-tight">Learn next: {studentAgent.title}</h2>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-white/75">{studentAgent.reason}</p>
+              {studentAgent.course && <p className="mt-3 text-xs font-semibold uppercase tracking-[0.14em] text-cert-green">{titleFor(studentAgent.course, "Course")}</p>}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (studentAgent.type === "task") {
+                setTaskCourseFilter(String(studentAgent.task.course_id || studentAgent.task.course || ""));
+                openTaskPage(studentAgent.task.task_type);
+                return;
+              }
+              if (studentAgent.type === "course") {
+                openCourse(studentAgent.course.id || studentAgent.course.course_id);
+                return;
+              }
+              openPanel(courses.length ? "courses" : "course-catalog");
+            }}
+            className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-cert-green px-4 py-3 text-sm font-bold text-cert-ink transition hover:bg-cert-yellow"
+          >
+            {studentAgent.actionLabel}<ChevronRight size={16} aria-hidden="true" />
+          </button>
+        </div>
+      </section>}
+
+      {activePanel === "courses" && <section className="rounded-[2rem] border border-cert-line bg-white p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)] sm:p-7" aria-labelledby="learning-agent-heading">
+        <div className="flex flex-col gap-4 border-b border-slate-100 pb-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-cert-green-dark">Learning Agent</p>
+            <h2 id="learning-agent-heading" className="mt-2 text-2xl font-bold tracking-tight text-cert-ink">Your personalized learning path</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-500">A focused sequence built from your course progress and current work.</p>
+          </div>
+          <span className="inline-flex w-fit items-center gap-2 rounded-full bg-cert-mint px-3 py-2 text-xs font-semibold text-cert-green-dark"><Sparkles size={14} aria-hidden="true" /> {learningPath.length} steps</span>
+        </div>
+        {learningPath.length ? <ol className="mt-5 grid gap-3 lg:grid-cols-2">
+          {learningPath.map((step) => <li key={`${step.number}-${step.course.id || step.course.course_id}`} className="flex min-w-0 items-center gap-3 rounded-2xl border border-slate-100 bg-[#fbfdfb] p-4">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-cert-navy text-sm font-bold text-cert-yellow">{step.number}</span>
+            <div className="min-w-0 flex-1"><p className="truncate text-sm font-bold text-cert-ink">{step.title}</p><p className="mt-1 truncate text-xs text-slate-500">{titleFor(step.course, "Course")} · {step.detail}</p></div>
+            <button type="button" onClick={() => {
+              if (step.task) {
+                setTaskCourseFilter(String(step.task.course_id || step.task.course || ""));
+                openTaskPage(step.task.task_type);
+              } else {
+                openCourse(step.course.id || step.course.course_id);
+              }
+            }} className="shrink-0 rounded-xl bg-cert-mint px-3 py-2 text-xs font-bold text-cert-green-dark transition hover:bg-cert-green hover:text-cert-ink">Open</button>
+          </li>)}
+        </ol> : <div className="mt-5 rounded-2xl bg-cert-mint p-4 text-sm text-slate-600">Enroll in a course to generate your learning path.</div>}
+      </section>}
+
+      {activePanel === "courses" && <section className="mx-auto max-w-6xl rounded-[2rem] border border-cert-line bg-[#fffdf5] p-5 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.12)] sm:p-7" aria-labelledby="assessment-agent-heading">
+        <div className="flex flex-col gap-4 border-b border-[#eee8c9] pb-5 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#a27600]">Assessment Agent</p>
+            <h2 id="assessment-agent-heading" className="mt-2 text-2xl font-bold tracking-tight text-cert-ink">Practice your weak topic</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-500">{assessmentAgent.reason}</p>
+          </div>
+          {assessmentAgent.course && <span className="inline-flex w-fit items-center gap-2 rounded-full bg-white px-3 py-2 text-xs font-semibold text-[#8a6a00] ring-1 ring-[#eee8c9]">{titleFor(assessmentAgent.course, "Course")}</span>}
+        </div>
+        {assessmentAgent.questions.length ? <div className="mt-5">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2"><p className="text-sm font-bold text-cert-ink">Topic: {assessmentAgent.topic}</p>{assessmentSubmitted && <span className="rounded-full bg-cert-green/15 px-3 py-1 text-xs font-bold text-cert-green-dark">Score: {assessmentAgent.questions.filter((question) => Number(assessmentAnswers[question.id]) === question.answer).length}/{assessmentAgent.questions.length}</span>}</div>
+          <div className="grid gap-4">
+            {assessmentAgent.questions.map((question, questionIndex) => <fieldset key={question.id} className="rounded-2xl border border-[#eee8c9] bg-white p-4">
+              <legend className="flex max-w-full items-start gap-3 px-1 text-sm font-bold leading-6 text-cert-ink"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#fff4bf] text-xs text-[#a27600]">{questionIndex + 1}</span><span className="pt-0.5">{question.prompt}</span></legend>
+              <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                {question.options.map((option, optionIndex) => <label key={option} className={`flex cursor-pointer items-start gap-2 rounded-xl border p-3 text-xs leading-5 transition ${assessmentSubmitted && optionIndex === question.answer ? "border-cert-green bg-cert-mint text-cert-green-dark" : "border-slate-200 text-slate-600 hover:border-[#d6bb4a]"}`}>
+                  <input type="radio" name={`assessment-${question.id}`} value={optionIndex} checked={String(assessmentAnswers[question.id]) === String(optionIndex)} onChange={() => setAssessmentAnswers((current) => ({ ...current, [question.id]: optionIndex }))} disabled={assessmentSubmitted} className="mt-1 shrink-0 accent-cert-green" />
+                  <span>{option}</span>
+                </label>)}
+              </div>
+            </fieldset>)}
+          </div>
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            {!assessmentSubmitted ? <button type="button" onClick={submitAssessment} disabled={Object.keys(assessmentAnswers).length < assessmentAgent.questions.length} className="rounded-xl bg-cert-ink px-4 py-3 text-sm font-bold text-white transition hover:bg-cert-navy disabled:cursor-not-allowed disabled:bg-slate-300">Check answers</button> : <button type="button" onClick={() => { setAssessmentAnswers({}); setAssessmentSubmitted(false); }} className="rounded-xl bg-cert-yellow px-4 py-3 text-sm font-bold text-cert-ink transition hover:bg-[#d9da4a]">Try again</button>}
+            {assessmentSubmitted && <p className="text-sm text-slate-600">Review the highlighted answers, then try the set again to reinforce the topic.</p>}
+          </div>
+        </div> : <div className="mt-5 rounded-2xl bg-white p-4 text-sm text-slate-600 ring-1 ring-[#eee8c9]">Complete a course task to unlock a focused practice set.</div>}
+      </section>}
+
+      {activePanel === "courses" && <section className="rounded-[2rem] border border-cert-navy/15 bg-[linear-gradient(135deg,#f4f8ff_0%,#ffffff_62%,#f1fbf4_100%)] p-6 shadow-[0_24px_60px_-35px_rgba(15,23,42,0.14)] sm:p-7" aria-labelledby="tutor-agent-heading">
+        <div className="flex flex-col gap-4 border-b border-slate-200 pb-5 sm:flex-row sm:items-end sm:justify-between">
+          <div><p className="text-xs font-bold uppercase tracking-[0.2em] text-cert-navy">AI Tutor Agent</p><h2 id="tutor-agent-heading" className="mt-2 text-2xl font-bold tracking-tight text-cert-ink">Ask about your course</h2><p className="mt-2 text-sm leading-6 text-slate-500">Get a plain-language explanation based on your current course and learning work.</p></div>
+          <span className="inline-flex w-fit items-center gap-2 rounded-full bg-white px-3 py-2 text-xs font-semibold text-cert-green-dark ring-1 ring-cert-line"><BookOpen size={14} aria-hidden="true" /> Topic: {assessmentAgent.topic}</span>
+        </div>
+        <form className="mt-5 flex flex-col gap-3 sm:flex-row" onSubmit={askTutor}>
+          <label className="sr-only" htmlFor="tutor-question">Ask the AI Tutor a question</label>
+          <input id="tutor-question" value={tutorQuestion} onChange={(event) => setTutorQuestion(event.target.value)} placeholder="For example: How do I get started?" className="min-w-0 flex-1 rounded-xl border border-cert-line bg-white px-4 py-3 text-sm text-cert-ink outline-none transition placeholder:text-slate-400 focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" />
+          <button type="submit" className="inline-flex items-center justify-center gap-2 rounded-xl bg-cert-navy px-5 py-3 text-sm font-bold text-white transition hover:bg-cert-green hover:text-cert-ink"><Sparkles size={16} aria-hidden="true" /> Ask tutor</button>
+        </form>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {["What does this concept mean?", "How should I start?", "Why is this important?"].map((prompt) => <button key={prompt} type="button" onClick={() => setTutorQuestion(prompt)} className="rounded-full border border-cert-line bg-white px-3 py-1.5 text-xs font-medium text-slate-600 transition hover:border-cert-green hover:bg-cert-mint">{prompt}</button>)}
+        </div>
+        {tutorResponse && <div className="mt-5 rounded-2xl border border-cert-green/25 bg-white p-4 ring-1 ring-cert-green/10"><p className="text-xs font-bold uppercase tracking-[0.16em] text-cert-green-dark">Tutor explanation</p><p className="mt-2 text-sm leading-6 text-slate-700">{tutorResponse}</p></div>}
+      </section>}
 
       <section id="student-panel" className="w-full scroll-mt-28">
         <div id="enrolled-courses" className={`grid gap-6 xl:grid-cols-[1.05fr_0.95fr] ${activePanel === "courses" ? "" : "hidden"}`}>
@@ -1377,6 +1694,16 @@ export default function StudentDashboard() {
             <div className="absolute -bottom-12 right-8 h-32 w-32 rounded-full border border-white/10" />
             <div className="relative flex flex-wrap items-center justify-between gap-5"><div><p className="text-xs font-bold uppercase tracking-[0.24em] text-cert-yellow">Course completion centre</p><h1 className="mt-2 text-3xl font-semibold tracking-tight">Finish your course, earn your certificate</h1><p className="mt-2 max-w-2xl text-sm leading-6 text-emerald-50/85">Take your final assessment, track your result, and download certificates you have earned.</p></div><span className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/15 bg-white/10 text-cert-yellow backdrop-blur"><Award size={27} aria-hidden="true" /></span></div>
           </header>
+          <section className="rounded-[2rem] border border-cert-green/25 bg-[linear-gradient(115deg,#eefbf2_0%,#ffffff_62%,#fffbed_100%)] p-6 shadow-[0_20px_50px_-34px_rgba(15,23,42,0.2)] sm:p-7" aria-labelledby="certificate-agent-heading">
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex min-w-0 items-start gap-4">
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-cert-navy text-cert-yellow"><Award size={23} aria-hidden="true" /></span>
+                <div className="min-w-0"><p className="text-xs font-bold uppercase tracking-[0.2em] text-cert-green-dark">Certificate Agent</p><h2 id="certificate-agent-heading" className="mt-2 text-xl font-bold tracking-tight text-cert-ink">{certificateAgent.title}</h2><p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">{certificateAgent.detail}</p></div>
+              </div>
+              <button type="button" onClick={() => openPanel("certificate")} className="inline-flex shrink-0 items-center justify-center gap-2 rounded-xl bg-cert-green px-4 py-3 text-sm font-bold text-cert-ink transition hover:bg-cert-green-dark hover:text-white"><ChevronRight size={16} aria-hidden="true" />{certificateAgent.actionLabel}</button>
+            </div>
+            <div className="mt-5 grid gap-3 border-t border-cert-line pt-5 text-xs font-semibold text-slate-600 sm:grid-cols-3"><span className={courseStats.eligible ? "text-cert-green-dark" : "text-amber-700"}><CheckCircle2 size={15} className="mr-1 inline" aria-hidden="true" />Coursework {courseStats.eligible ? "approved" : "in progress"}</span><span className={selectedCertificateTest?.passed ? "text-cert-green-dark" : "text-slate-600"}><Target size={15} className="mr-1 inline" aria-hidden="true" />Final test {selectedCertificateTest ? (selectedCertificateTest.passed ? "passed" : "available") : "pending"}</span><span className={certificateAgent.status === "issued" ? "text-cert-green-dark" : "text-slate-600"}><Award size={15} className="mr-1 inline" aria-hidden="true" />Certificate {certificateAgent.status === "issued" ? "issued" : "not issued"}</span></div>
+          </section>
           {issuedCertificates.length > 0 && (
             <div className="grid gap-6">
               {issuedCertificates.map(({ certificate, course }) => (

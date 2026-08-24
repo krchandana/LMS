@@ -442,6 +442,59 @@ export default function TrainerDashboard() {
       }))
       .sort((first, second) => titleFor(first.course, "Course").localeCompare(titleFor(second.course, "Course")));
   }, [certificateApprovals, courseById, studentById]);
+  const trainerAgentInsights = useMemo(() => {
+    const insights = enrollments.map((enrollment) => {
+      const studentId = String(enrollment.student_id || enrollment.profile_id || enrollment.user_id || "");
+      const courseId = String(enrollment.course_id || "");
+      const student = studentById.get(studentId);
+      const course = courseById.get(courseId);
+      if (!student || !course) return null;
+
+      const courseAssignments = assignments.filter((assignment) => String(assignment.course_id) === courseId);
+      const studentProjects = projects.filter((project) => String(project.course_id) === courseId && String(project.student_id) === studentId);
+      const totalTasks = courseAssignments.length + studentProjects.length;
+      const approvedAssignments = courseAssignments.filter((assignment) => submissions.some((submission) => String(submission.assignment_id) === String(assignment.id) && String(submission.student_id) === studentId && submission.status === "approved"));
+      const approvedProjects = studentProjects.filter((project) => project.status === "approved");
+      const approvedTasks = approvedAssignments.length + approvedProjects.length;
+      const rejectedAssignments = courseAssignments.filter((assignment) => submissions.some((submission) => String(submission.assignment_id) === String(assignment.id) && String(submission.student_id) === studentId && ["rejected", "rework"].includes(String(submission.status).toLowerCase())));
+      const rejectedProjects = studentProjects.filter((project) => ["rejected", "rework"].includes(String(project.status).toLowerCase()));
+      const rejectedCount = rejectedAssignments.length + rejectedProjects.length;
+      const attendanceRows = attendance.filter((record) => String(record.course_id) === courseId && String(record.student_id) === studentId);
+      const attendanceRate = attendanceRows.length ? Math.round((attendanceRows.filter((record) => record.status === "present").length / attendanceRows.length) * 100) : null;
+      const test = certificateTests.find((item) => String(item.course_id) === courseId);
+      const attempts = test ? certificateTestAttempts.filter((attempt) => String(attempt.test_id) === String(test.id) && String(attempt.student_id) === studentId) : [];
+      const failedAttempts = attempts.filter((attempt) => !attempt.passed).length;
+      const progress = totalTasks ? Math.round((approvedTasks / totalTasks) * 100) : 0;
+      const reasons = [];
+      if (rejectedCount) reasons.push(`${rejectedCount} revision${rejectedCount === 1 ? "" : "s"}`);
+      if (totalTasks && progress < 50) reasons.push(`${progress}% course progress`);
+      if (attendanceRate !== null && attendanceRate < 75) reasons.push(`${attendanceRate}% attendance`);
+      if (failedAttempts) reasons.push(`${failedAttempts} failed test attempt${failedAttempts === 1 ? "" : "s"}`);
+      return reasons.length ? {
+        student,
+        course,
+        progress,
+        attendanceRate,
+        reasons,
+        priority: rejectedCount * 4 + failedAttempts * 3 + (progress < 50 ? 2 : 0) + (attendanceRate !== null && attendanceRate < 75 ? 2 : 0),
+      } : null;
+    }).filter(Boolean);
+
+    return insights.sort((first, second) => second.priority - first.priority).slice(0, 6);
+  }, [assignments, attendance, certificateTestAttempts, certificateTests, courseById, enrollments, projects, submissions, studentById]);
+  const notificationAgentItems = useMemo(() => trainerAgentInsights.map((insight) => {
+    const hasRevision = insight.reasons.some((reason) => reason.includes("revision"));
+    const hasFailedTest = insight.reasons.some((reason) => reason.includes("failed test"));
+    const intervention = hasRevision || hasFailedTest;
+    return {
+      ...insight,
+      kind: intervention ? "Intervention" : "Reminder",
+      message: intervention
+        ? "Send targeted feedback or schedule a check-in before the learner falls further behind."
+        : "Send a gentle progress reminder and offer help with the next course task.",
+      priority: intervention ? "High priority" : "Follow up",
+    };
+  }), [trainerAgentInsights]);
 
   const enrolledStudentIds = (courseId) => [...new Set(
     enrollments
@@ -771,6 +824,7 @@ export default function TrainerDashboard() {
       questions: questions.map((question) => ({
         id: question.id,
         question: question.question.trim(),
+        topic: question.topic.trim() || "Core concepts",
         options: question.options.map((option) => option.trim()),
         correct_option: String(question.correctOption),
       })),
@@ -952,6 +1006,32 @@ export default function TrainerDashboard() {
             </div>
             </div>
           </div>
+          <section className="overflow-hidden rounded-[2rem] border border-rose-200/80 bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.18)]" aria-labelledby="trainer-agent-heading">
+            <div className="flex flex-wrap items-end justify-between gap-4 bg-[linear-gradient(135deg,#fff8f6_0%,#fffdf5_70%,#f2fbf5_100%)] px-6 py-7 sm:px-8">
+              <div><p className="text-xs font-bold uppercase tracking-[0.22em] text-rose-600">Trainer Agent</p><h2 id="trainer-agent-heading" className="mt-2 text-2xl font-semibold tracking-tight text-cert-ink">Students who may need support</h2><p className="mt-1 text-sm text-slate-500">Prioritized insights from progress, revisions, assessment attempts, and attendance.</p></div>
+              <span className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-semibold text-rose-700 shadow-sm ring-1 ring-rose-100"><UsersRound size={16} /> {trainerAgentInsights.length} {trainerAgentInsights.length === 1 ? "learner" : "learners"} flagged</span>
+            </div>
+            {trainerAgentInsights.length ? <div className="grid gap-3 p-5 sm:p-6 lg:grid-cols-2">
+              {trainerAgentInsights.map((insight) => <article key={`${insight.student.id}-${insight.course.id}`} className="flex min-w-0 items-start gap-3 rounded-2xl border border-slate-100 bg-[#fffdfc] p-4">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-50 text-sm font-bold text-rose-700">{titleFor(insight.student, "S").charAt(0).toUpperCase()}</span>
+                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="truncate font-semibold text-cert-ink">{titleFor(insight.student, "Student")}</h3><span className="rounded-full bg-rose-50 px-2.5 py-1 text-[0.62rem] font-bold uppercase tracking-[0.12em] text-rose-700">Needs attention</span></div><p className="mt-1 truncate text-xs font-medium text-cert-green-dark">{titleFor(insight.course, "Course")}</p><p className="mt-2 text-sm leading-5 text-slate-600">{insight.reasons.join(" · ")}</p></div>
+                <button type="button" onClick={() => openWorkspace("assignment-submissions")} className="shrink-0 rounded-xl bg-cert-mint px-3 py-2 text-xs font-bold text-cert-green-dark transition hover:bg-cert-green hover:text-cert-ink">Review</button>
+              </article>)}
+            </div> : <div className="px-6 py-10 text-center text-sm text-slate-500 sm:px-8">No struggling students detected from the current course data.</div>}
+          </section>
+          <section className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.18)]" aria-labelledby="notification-agent-heading">
+            <div className="flex flex-wrap items-end justify-between gap-4 bg-[linear-gradient(135deg,#f4f8ff_0%,#ffffff_68%,#f1fbf4_100%)] px-6 py-7 sm:px-8">
+              <div><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-navy">Notification Agent</p><h2 id="notification-agent-heading" className="mt-2 text-2xl font-semibold tracking-tight text-cert-ink">Suggested reminders and interventions</h2><p className="mt-1 text-sm text-slate-500">Decisions based on learner risk signals. Review before contacting students.</p></div>
+              <span className="inline-flex items-center gap-2 rounded-2xl bg-white px-4 py-2.5 text-sm font-semibold text-cert-navy shadow-sm ring-1 ring-cert-line"><Bell size={16} /> {notificationAgentItems.length} suggested</span>
+            </div>
+            {notificationAgentItems.length ? <div className="grid gap-3 p-5 sm:p-6 lg:grid-cols-2">
+              {notificationAgentItems.map((item) => <article key={`notification-${item.student.id}-${item.course.id}`} className="flex min-w-0 items-start gap-3 rounded-2xl border border-slate-100 bg-[#fbfdff] p-4">
+                <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${item.kind === "Intervention" ? "bg-rose-50 text-rose-700" : "bg-sky-50 text-sky-700"}`}><Bell size={18} aria-hidden="true" /></span>
+                <div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="truncate font-semibold text-cert-ink">{titleFor(item.student, "Student")}</h3><span className={`rounded-full px-2.5 py-1 text-[0.62rem] font-bold uppercase tracking-[0.12em] ${item.kind === "Intervention" ? "bg-rose-50 text-rose-700" : "bg-sky-50 text-sky-700"}`}>{item.kind}</span></div><p className="mt-1 truncate text-xs font-medium text-cert-green-dark">{titleFor(item.course, "Course")} · {item.priority}</p><p className="mt-2 text-sm leading-5 text-slate-600">{item.reasons.join(" · ")}. {item.message}</p></div>
+                <button type="button" onClick={() => openWorkspace("assignment-submissions")} className="shrink-0 rounded-xl bg-cert-mint px-3 py-2 text-xs font-bold text-cert-green-dark transition hover:bg-cert-green hover:text-cert-ink">Review</button>
+              </article>)}
+            </div> : <div className="px-6 py-10 text-center text-sm text-slate-500 sm:px-8">No reminders or interventions are suggested from the current learner data.</div>}
+          </section>
           <div className="overflow-hidden rounded-[2rem] border border-cert-line bg-white shadow-[0_24px_60px_-38px_rgba(7,26,47,0.18)]">
             <div className="flex flex-wrap items-end justify-between gap-4 bg-[linear-gradient(135deg,#f5fffa_0%,#eef8f2_65%,#e7f5ec_100%)] px-6 py-7 sm:px-8">
               <div><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-green-dark">Teaching portfolio</p><h2 className="mt-2 text-2xl font-semibold tracking-tight text-cert-ink">My course rooms</h2><p className="mt-1 text-sm text-slate-500">A quick view of each learning space and its active learners.</p></div>
@@ -1089,7 +1169,7 @@ export default function TrainerDashboard() {
           <header className="bg-[linear-gradient(135deg,#062239_0%,#08415a_58%,#0c8a58_140%)] px-6 py-7 text-white"><p className="text-xs font-bold uppercase tracking-[0.22em] text-cert-yellow">Certificate requirement</p><h2 className="mt-2 text-2xl font-semibold">Create the final course test</h2><p className="mt-2 text-sm leading-6 text-emerald-50/85">Students need more than 75% to pass. They receive a maximum of three attempts, with one day between failed attempts.</p></header>
           <form onSubmit={saveCertificateTest} className="space-y-5 p-5 sm:p-6">
             <div className="grid gap-4 sm:grid-cols-2"><label className="text-sm font-semibold text-cert-ink">Course<select value={certificateTestForm.courseId} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, courseId: event.target.value })} className="mt-2 w-full rounded-xl border border-cert-line bg-cert-mint px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required><option value="">Select course</option>{courses.map((course) => <option key={course.id} value={course.id}>{titleFor(course, "Course")}</option>)}</select></label><label className="text-sm font-semibold text-cert-ink">Test title<input value={certificateTestForm.title} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, title: event.target.value })} className="mt-2 w-full rounded-xl border border-cert-line px-4 py-3 font-normal outline-none focus:border-cert-green focus:ring-4 focus:ring-cert-green/15" required /></label></div>
-            <div className="space-y-4">{certificateTestForm.questions.map((question, questionIndex) => <fieldset key={question.id} className="rounded-2xl border border-cert-line bg-cert-mint/50 p-4"><legend className="px-1 text-sm font-bold text-cert-green-dark">Question {questionIndex + 1}</legend><input value={question.question} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, questions: certificateTestForm.questions.map((item, index) => index === questionIndex ? { ...item, question: event.target.value } : item) })} placeholder="Enter a course-related question" className="mt-2 w-full rounded-xl border border-cert-line bg-white px-3 py-2.5 text-sm outline-none focus:border-cert-green" required /><div className="mt-3 grid gap-2 sm:grid-cols-2">{question.options.map((option, optionIndex) => <label key={`${question.id}-${optionIndex}`} className="flex items-center gap-2 rounded-xl border border-cert-line bg-white px-3 py-2 text-sm"><input type="radio" name={`${question.id}-answer`} checked={question.correctOption === optionIndex} onChange={() => setCertificateTestForm({ ...certificateTestForm, questions: certificateTestForm.questions.map((item, index) => index === questionIndex ? { ...item, correctOption: optionIndex } : item) })} /><input value={option} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, questions: certificateTestForm.questions.map((item, index) => index === questionIndex ? { ...item, options: item.options.map((value, currentIndex) => currentIndex === optionIndex ? event.target.value : value) } : item) })} placeholder={`Option ${optionIndex + 1}`} className="min-w-0 flex-1 outline-none" required /></label>)}</div><p className="mt-2 text-xs text-slate-500">Select the radio button beside the correct answer.</p></fieldset>)}</div>
+            <div className="space-y-4">{certificateTestForm.questions.map((question, questionIndex) => <fieldset key={question.id} className="rounded-2xl border border-cert-line bg-cert-mint/50 p-4"><legend className="px-1 text-sm font-bold text-cert-green-dark">Question {questionIndex + 1}</legend><input value={question.topic || ""} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, questions: certificateTestForm.questions.map((item, index) => index === questionIndex ? { ...item, topic: event.target.value } : item) })} placeholder="Skill area, e.g. loops or data types" className="mt-2 w-full rounded-xl border border-cert-line bg-white px-3 py-2.5 text-sm outline-none focus:border-cert-green" required /><input value={question.question} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, questions: certificateTestForm.questions.map((item, index) => index === questionIndex ? { ...item, question: event.target.value } : item) })} placeholder="Enter a course-related question" className="mt-2 w-full rounded-xl border border-cert-line bg-white px-3 py-2.5 text-sm outline-none focus:border-cert-green" required /><div className="mt-3 grid gap-2 sm:grid-cols-2">{question.options.map((option, optionIndex) => <label key={`${question.id}-${optionIndex}`} className="flex items-center gap-2 rounded-xl border border-cert-line bg-white px-3 py-2 text-sm"><input type="radio" name={`${question.id}-answer`} checked={question.correctOption === optionIndex} onChange={() => setCertificateTestForm({ ...certificateTestForm, questions: certificateTestForm.questions.map((item, index) => index === questionIndex ? { ...item, correctOption: optionIndex } : item) })} /><input value={option} onChange={(event) => setCertificateTestForm({ ...certificateTestForm, questions: certificateTestForm.questions.map((item, index) => index === questionIndex ? { ...item, options: item.options.map((value, currentIndex) => currentIndex === optionIndex ? event.target.value : value) } : item) })} placeholder={`Option ${optionIndex + 1}`} className="min-w-0 flex-1 outline-none" required /></label>)}</div><p className="mt-2 text-xs text-slate-500">The skill area powers personalized feedback after a student attempt.</p></fieldset>)}</div>
             {(error || message) && <p className={`rounded-xl px-4 py-3 text-sm ${error ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>{error || message}</p>}
             <button type="submit" className="rounded-xl bg-cert-green px-5 py-3 font-semibold text-cert-ink transition hover:bg-cert-green-dark hover:text-white">Save certificate test</button>
           </form>
